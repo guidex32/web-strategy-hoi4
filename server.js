@@ -18,9 +18,7 @@ const dbConfig = {
 };
 
 let pool;
-(async () => {
-  pool = await mysql.createPool(dbConfig);
-})();
+(async () => { pool = await mysql.createPool(dbConfig); })();
 
 // --- Middleware ---
 app.use(cors());
@@ -65,9 +63,12 @@ app.post('/api/auth', async (req,res)=>{
   }
   if(op==='session'){
     try{
-      const user = req.user;
-      return res.json({ok:true, user});
-    }catch(e){return res.json({ok:false});}
+      const header = req.headers['authorization'];
+      if(!header) return res.json({ok:true, user:null});
+      const token = header.split(' ')[1];
+      const decoded = jwt.verify(token, SECRET);
+      return res.json({ok:true, user:decoded, token});
+    }catch(e){return res.json({ok:true, user:null});}
   }
 });
 
@@ -75,39 +76,51 @@ app.post('/api/auth', async (req,res)=>{
 app.get('/api/countries', verifyToken, async (req,res)=>{
   try{
     const [rows] = await pool.query('SELECT * FROM countries');
-    res.json(rows);
+    const countries = {};
+    rows.forEach(r=>{ countries[r.id]=r; });
+    res.json(countries);
   }catch(e){res.json({ok:false,message:e.message});}
 });
 
 // --- Actions ---
 app.post('/api', verifyToken, async (req,res)=>{
-  const {op, countryId, unit, cost, attackerId, defenderId, name} = req.body;
+  const {op, countryId, unit, cost, attackerId, defenderId, name, login} = req.body;
   try{
+    // fetch country
+    const [rows] = await pool.query('SELECT * FROM countries WHERE id=?',[countryId||attackerId||defenderId]);
+    if(rows.length===0 && op!=='create_country') return res.json({ok:false,message:'Страна не найдена'});
+    const country = rows[0];
+
     if(op==='buy_unit'){
-      const [rows] = await pool.query('SELECT * FROM countries WHERE id=?',[countryId]);
-      if(rows.length===0) return res.json({ok:false,message:'Страна не найдена'});
-      let army = JSON.parse(rows[0].army||'{}');
+      if(req.user.role!=='admin' && req.user.login!==country.owner) return res.status(403).json({ok:false,message:'Не твоя страна'});
+      let army = JSON.parse(country.army||'{}');
       army[unit] = (army[unit]||0)+1;
-      await pool.query('UPDATE countries SET army=? WHERE id=?',[JSON.stringify(army),countryId]);
+      await pool.query('UPDATE countries SET army=? WHERE id=?',[JSON.stringify(army),country.id]);
       return res.json({ok:true});
     }
+
     if(op==='declare_war'){
+      if(req.user.role!=='admin' && req.user.login!==country.owner) return res.status(403).json({ok:false,message:'Не твоя страна'});
       await pool.query('UPDATE countries SET status=? WHERE id=?',['war',defenderId]);
       return res.json({ok:true});
     }
+
     if(op==='attack'){
-      const [rows] = await pool.query('SELECT * FROM countries WHERE id=?',[defenderId]);
-      if(rows.length===0) return res.json({ok:false,message:'Страна не найдена'});
-      // простая логика атаки: уменьшаем очки на 10
-      let points = rows[0].points || 0;
+      if(req.user.role!=='admin' && req.user.login!==country.owner) return res.status(403).json({ok:false,message:'Не твоя страна'});
+      const [defRows] = await pool.query('SELECT * FROM countries WHERE id=?',[defenderId]);
+      if(defRows.length===0) return res.json({ok:false,message:'Цель не найдена'});
+      let points = defRows[0].points || 0;
       points = Math.max(points-10,0);
       await pool.query('UPDATE countries SET points=? WHERE id=?',[points,defenderId]);
       return res.json({ok:true,lost:10});
     }
-    if(op==='create_country' && req.user.role==='admin'){
-      await pool.query('INSERT INTO countries(name,economy,army,status,points) VALUES(?,?,?,?,?)',[name,0,'{}','peace',0]);
+
+    if(op==='create_country'){
+      if(req.user.role!=='admin') return res.status(403).json({ok:false,message:'Только админ'});
+      await pool.query('INSERT INTO countries(name,economy,army,status,points,owner) VALUES(?,?,?,?,?,?)',[name,0,'{}','peace',0,null]);
       return res.json({ok:true});
     }
+
     res.json({ok:false,message:'Неизвестная операция'});
   }catch(e){res.json({ok:false,message:e.message});}
 });
