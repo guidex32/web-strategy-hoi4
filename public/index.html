@@ -1,86 +1,48 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="ru">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>HOI-Lite — стратегия</title>
-  <link rel="stylesheet" href="css/styles.css" />
+<meta charset="UTF-8">
+<title>Web Strategy</title>
+<link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <header class="topbar">
-    <div class="brand">HOI-Lite (Node)</div>
-    <nav class="nav">
-      <button id="btn-login" class="btn">Войти</button>
-      <button id="btn-logout" class="btn btn-ghost hidden">Выйти</button>
-      <span id="user-info" class="badge hidden"></span>
-      <span id="points" class="badge">Очки: 0</span>
-    </nav>
-  </header>
+<header>
+  <div id="user-info" class="hidden"></div>
+  <button id="btn-login">Войти</button>
+  <button id="btn-logout" class="hidden">Выйти</button>
+</header>
 
-  <main class="layout">
-    <aside class="panel">
-      <h3>Действия</h3>
-      <div id="actions" class="actions">
-        <button class="btn" data-action="economy-spend" data-cost="5">Построить здание (+экономика)</button>
-        <button class="btn" data-action="buy-unit" data-unit="tank" data-cost="10">Купить танк</button>
-        <button class="btn" data-action="buy-unit" data-unit="pvo" data-cost="12">Купить ПВО</button>
-        <button class="btn" data-action="declare-war">Объявить войну</button>
-        <button class="btn" data-action="attack">Атака</button>
-        <hr/>
-        <button class="btn btn-warn" data-action="admin-open">Админ панель</button>
-      </div>
+<main>
+  <div id="points">Очки: 0</div>
+  <iframe id="map" src="map.svg"></iframe>
+  <div id="tooltip" class="tooltip hidden"></div>
+  <div id="info">
+    <h3 id="info-country">—</h3>
+    <p>Владелец: <span id="info-owner">—</span></p>
+    <p>Экономика: <span id="info-econ">0</span></p>
+    <p>Армия: <span id="info-army">—</span></p>
+    <p>Статус: <span id="info-status">—</span></p>
+  </div>
 
-      <div id="admin-panel" class="admin hidden">
-        <h3>Админка</h3>
-        <div class="stack">
-          <button class="btn" data-admin="create-country">Создать страну</button>
-          <button class="btn" data-admin="assign-owner">Назначить владельца</button>
-          <button class="btn" data-admin="give-points">Выдать очки</button>
-          <button class="btn" data-admin="toggle-economy">Экономика: вкл/выкл</button>
-          <button class="btn" data-admin="view-logs">Логи</button>
-        </div>
-      </div>
-    </aside>
+  <div id="actions">
+    <button class="btn" data-action="buy-unit" data-unit="soldier">Купить солдата</button>
+    <button class="btn" data-action="declare-war">Объявить войну</button>
+    <button class="btn" data-action="attack">Атаковать</button>
+    <button class="btn" data-action="admin-open">Админ панель</button>
+  </div>
 
-    <section class="map-wrap">
-      <object id="map" type="image/svg+xml" data="img/map.svg" class="map-object"></object>
-      <div id="tooltip" class="tooltip hidden"></div>
-    </section>
+  <div id="admin-panel" class="hidden">
+    <button class="btn" data-admin="create-country">Создать страну</button>
+  </div>
+</main>
 
-    <aside class="panel">
-      <h3>Инфо</h3>
-      <div id="info" class="info">
-        <div><b>Страна:</b> <span id="info-country">—</span></div>
-        <div><b>Владелец:</b> <span id="info-owner">—</span></div>
-        <div><b>Экономика:</b> <span id="info-econ">0</span></div>
-        <div><b>Армия:</b> <span id="info-army">нет</span></div>
-        <div><b>Статус:</b> <span id="info-status">мир</span></div>
-      </div>
-    </aside>
-  </main>
+<dialog id="dlg-auth">
+  <input type="text" id="auth-username" placeholder="Логин">
+  <input type="password" id="auth-password" placeholder="Пароль">
+  <button id="btn-signin">Войти</button>
+  <button id="btn-register">Регистрация</button>
+</dialog>
 
-  <dialog id="dlg-auth">
-    <form method="dialog" class="stack">
-      <h3>Вход / Регистрация</h3>
-      <input type="text" id="auth-username" placeholder="Логин" required />
-      <input type="password" id="auth-password" placeholder="Пароль" required />
-      <div class="row">
-        <button id="btn-register" class="btn">Регистрация</button>
-        <button id="btn-signin" class="btn btn-primary">Войти</button>
-        <button class="btn btn-ghost" value="cancel">Закрыть</button>
-      </div>
-      <small>Роли: admin / owner / player. Админа можно назначить вручную в data/users.json</small>
-    </form>
-  </dialog>
-
-  <dialog id="dlg-logs">
-    <form method="dialog" class="stack">
-      <h3>Логи</h3>
-      <pre id="logs-view" class="logs"></pre>
-      <div class="row"><button class="btn btn-primary">Закрыть</button></div>
-    </form>
-  </dialog>
-
-  <script src="js/app.js"></script>
+<script src="app.js"></script>
 </body>
 </html>
