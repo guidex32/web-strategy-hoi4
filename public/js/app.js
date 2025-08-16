@@ -33,7 +33,7 @@ async function checkSession(){
   }
 
   const r = await apiAuth('session', {});
-  if(r.user){
+  if(r.ok && r.user){
     USER = r.user;
     $('user-info').textContent = USER.login+' ('+USER.role+')';
     show($('user-info')); show($('btn-logout')); hide($('btn-login'));
@@ -94,13 +94,15 @@ $('btn-signin').onclick = async e=>{
 // --- Load countries ---
 async function loadCountries(){
   if(!TOKEN) return;
-  const res = await fetch(`${API}/countries`,{
-    headers:{ 'Authorization':'Bearer '+TOKEN }
-  });
-  const data = await res.json();
-  COUNTRIES = data;
-  updateMap();
-  updatePoints();
+  try{
+    const res = await fetch(`${API}/countries`,{
+      headers:{ 'Authorization':'Bearer '+TOKEN }
+    });
+    const data = await res.json();
+    COUNTRIES = data || [];
+    updateMap();
+    updatePoints();
+  }catch(e){ console.error(e); }
 }
 
 // --- Map ---
@@ -109,6 +111,7 @@ const mapObj = $('map');
 mapObj.onload = () => {
   const svgDoc = mapObj.contentDocument;
   if(!svgDoc) return;
+
   Object.values(COUNTRIES).forEach(c=>{
     const el = svgDoc.getElementById(c.id);
     if(el){
@@ -121,13 +124,16 @@ mapObj.onload = () => {
     }
   });
 
-  // --- Клик по карте для создания страны ---
   svgDoc.addEventListener('click', async e=>{
     if(!USER || USER.role!=='owner') return;
     if(!window.createCountryMode) return;
-    const pt = svgDoc.createSVGPoint();
+
+    const svg = svgDoc.documentElement;
+    const pt = svg.createSVGPoint();
     pt.x = e.clientX; pt.y = e.clientY;
-    const svgPt = pt.matrixTransform(svgDoc.getElementById('map').getScreenCTM().inverse());
+    const screenCTM = svg.getScreenCTM();
+    if(!screenCTM) return;
+    const svgPt = pt.matrixTransform(screenCTM.inverse());
     const x = Math.round(svgPt.x), y = Math.round(svgPt.y);
     const name = prompt('Название страны (без цифр):');
     if(!name || /[0-9]/.test(name)) return alert('Некорректное название');
@@ -181,8 +187,7 @@ document.querySelectorAll('#actions .btn').forEach(btn=>{
     if(!SELECTED_COUNTRY && !['admin-open'].includes(action)) return alert('Выберите страну');
 
     if(action==='economy-spend'){
-      await apiOp('toggle_economy',{});
-      await loadCountries();
+      await apiOp('toggle_economy',{}); await loadCountries();
     }
     if(action==='buy-unit'){
       await apiOp('buy_unit',{countryId:SELECTED_COUNTRY,unit:btn.dataset.unit,cost:btn.dataset.cost});
@@ -214,14 +219,12 @@ document.querySelectorAll('#admin-panel .btn').forEach(btn=>{
     if(op==='assign-owner'){
       const countryId = prompt('ID страны:'); if(!countryId) return;
       const login = prompt('Логин нового владельца:'); if(!login) return;
-      await apiOp('assign_owner',{countryId,login});
-      await loadCountries();
+      await apiOp('assign_owner',{countryId,login}); await loadCountries();
     }
     if(op==='give-points'){
       const countryId = prompt('ID страны:'); if(!countryId) return;
       const amount = prompt('Количество очков:'); if(!countryId || isNaN(amount)) return alert('Ошибка');
-      await apiOp('give_points',{countryId,amount});
-      await loadCountries();
+      await apiOp('give_points',{countryId,amount}); await loadCountries();
     }
     if(op==='toggle-economy'){ await apiOp('toggle_economy',{}); await loadCountries(); }
     if(op==='view-logs'){
@@ -235,14 +238,16 @@ document.querySelectorAll('#admin-panel .btn').forEach(btn=>{
 
 // --- API wrapper ---
 async function apiOp(op,data){
-  const res = await fetch(`${API}`,{
-    method:'POST',
-    headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer '+TOKEN },
-    body: JSON.stringify({op,...data})
-  });
-  const r = await res.json();
-  if(!r.ok) alert(r.message||'Ошибка');
-  return r;
+  try{
+    const res = await fetch(`${API}`,{
+      method:'POST',
+      headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer '+TOKEN },
+      body: JSON.stringify({op,...data})
+    });
+    const r = await res.json();
+    if(!r.ok) alert(r.message||'Ошибка');
+    return r;
+  }catch(e){ alert('Ошибка запроса'); console.error(e); return {ok:false}; }
 }
 
 // --- Init ---
