@@ -21,18 +21,17 @@
     <aside class="panel">
       <h3>Действия</h3>
       <div id="actions" class="actions">
-        <!-- Глобальные действия -->
-        <button class="btn" data-action="economy-spend" data-cost="5">(Г) Построить здание (+экономика)</button>
-        <button class="btn" data-action="buy-unit" data-unit="tank" data-cost="10">(Г) Купить танк</button>
-        <button class="btn" data-action="buy-unit" data-unit="pvo" data-cost="12">(Г) Купить ПВО</button>
-        <button class="btn" data-action="declare-war">(Г) Объявить войну</button>
-        <button class="btn" data-action="attack">(Г) Атака</button>
+        <button class="btn" data-action="economy-spend" data-cost="5">Построить здание (+экономика)</button>
+        <button class="btn" data-action="buy-unit" data-unit="tank" data-cost="10">Купить танк</button>
+        <button class="btn" data-action="buy-unit" data-unit="pvo" data-cost="12">Купить ПВО</button>
+        <button class="btn" data-action="declare-war">Объявить войну</button>
+        <button class="btn" data-action="attack">Атака</button>
         <hr/>
-        <button class="btn btn-warn" data-action="admin-open">(А) Панель админа</button>
+        <button class="btn btn-warn" data-action="admin-open">Админ панель</button>
       </div>
 
       <div id="admin-panel" class="admin hidden">
-        <h3>Админка (А)</h3>
+        <h3>Админка</h3>
         <div class="stack">
           <button class="btn" data-admin="create-country">Создать страну</button>
           <button class="btn" data-admin="assign-owner">Назначить владельца</button>
@@ -44,7 +43,7 @@
     </aside>
 
     <section class="map-wrap">
-      <object id="map" type="image/svg+xml" data="img/map.svg"></object>
+      <object id="map" type="image/svg+xml" data="img/map.svg" class="map-object"></object>
       <div id="tooltip" class="tooltip hidden"></div>
     </section>
 
@@ -60,7 +59,6 @@
     </aside>
   </main>
 
-  <!-- Модалки -->
   <dialog id="dlg-auth">
     <form method="dialog" class="stack">
       <h3>Вход / Регистрация</h3>
@@ -72,17 +70,6 @@
         <button class="btn btn-ghost" value="cancel">Закрыть</button>
       </div>
       <small>Роли: admin / owner / player. Админа можно назначить вручную в data/users.json</small>
-    </form>
-  </dialog>
-
-  <dialog id="dlg-prompt">
-    <form method="dialog" class="stack">
-      <h3 id="prompt-title">Заголовок</h3>
-      <input type="text" id="prompt-input" placeholder="значение"/>
-      <div class="row">
-        <button id="prompt-ok" class="btn btn-primary">Ок</button>
-        <button class="btn btn-ghost" value="cancel">Отмена</button>
-      </div>
     </form>
   </dialog>
 
