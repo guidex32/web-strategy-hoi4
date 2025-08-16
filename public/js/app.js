@@ -1,4 +1,4 @@
-const API = '51.38.13.75'; // или твой реальный хост
+const API = 'http://51.38.13.75:3000'; // твой хост Render
 let TOKEN = localStorage.getItem('token')||'';
 let USER = null;
 let COUNTRIES = [];
@@ -22,20 +22,21 @@ async function apiAuth(op,data){
 }
 
 async function checkSession(){
-  const r = await apiAuth('session',{});
-  if(r.user){
-    USER = r.user;
-    TOKEN = TOKEN || '';
-    localStorage.setItem('token',TOKEN);
-    $('user-info').textContent = USER.login+' ('+USER.role+')';
-    show($('user-info')); show($('btn-logout')); hide($('btn-login'));
-    if(USER.role!=='admin') hide($('admin-panel'));
-    else show($('admin-panel'));
-  }else{
-    USER = null;
-    hide($('user-info')); hide($('btn-logout')); show($('btn-login'));
-    hide($('admin-panel'));
-  }
+  if(!TOKEN) return;
+  try {
+    const r = await apiAuth('session',{});
+    if(r.user){
+      USER = r.user;
+      $('user-info').textContent = USER.login+' ('+USER.role+')';
+      show($('user-info')); show($('btn-logout')); hide($('btn-login'));
+      if(USER.role!=='admin') hide($('admin-panel'));
+      else show($('admin-panel'));
+    } else {
+      USER = null;
+      hide($('user-info')); hide($('btn-logout')); show($('btn-login'));
+      hide($('admin-panel'));
+    }
+  } catch(err){ console.error(err); }
 }
 
 // --- Login/Register ---
@@ -51,7 +52,7 @@ $('btn-register').onclick=async e=>{
   const login=$('auth-username').value.trim();
   const pass=$('auth-password').value.trim();
   const r = await apiAuth('register',{login,password:pass});
-  alert(r.message);
+  alert(r.msg || r.message);
 };
 $('btn-signin').onclick=async e=>{
   e.preventDefault();
@@ -59,13 +60,13 @@ $('btn-signin').onclick=async e=>{
   const pass=$('auth-password').value.trim();
   const r = await apiAuth('login',{login,password:pass});
   if(r.ok){
-    TOKEN=r.token;
+    TOKEN=r.token || '';
     localStorage.setItem('token',TOKEN);
     USER=r.user;
     dlgAuth.close();
     checkSession();
     loadCountries();
-  }else alert(r.message);
+  }else alert(r.msg || r.message);
 };
 
 // --- Countries ---
@@ -119,7 +120,7 @@ async function doAction(action,el){
     });
     const r=await res.json();
     if(r.ok){ alert('Куплено!'); await loadCountries();}
-    else alert(r.message);
+    else alert(r.msg || r.message);
   }
   if(action==='declare-war'){
     const defenderId=prompt('ID страны для войны?');
@@ -129,7 +130,7 @@ async function doAction(action,el){
       body: JSON.stringify({op:'declare_war',attackerId:countryId,defenderId})
     });
     const r=await res.json();
-    alert(r.ok?'Война объявлена!':r.message);
+    alert(r.ok?'Война объявлена!':r.msg || r.message);
     await loadCountries();
   }
   if(action==='attack'){
@@ -140,7 +141,7 @@ async function doAction(action,el){
       body: JSON.stringify({op:'attack',attackerId:countryId,defenderId})
     });
     const r=await res.json();
-    alert(r.ok?'Атака прошла! Потери врага: '+r.lost:r.message);
+    alert(r.ok?'Атака прошла! Потери врага: '+r.lost:r.msg || r.message);
     await loadCountries();
   }
 }
@@ -153,12 +154,15 @@ $('admin-panel').onclick=e=>{
   if(op==='create-country'){
     const name=prompt('Название страны?');
     if(!name) return;
-    fetch(`${API}/api`,{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+TOKEN},
-      body: JSON.stringify({op:'create_country',name})}).then(r=>r.json()).then(r=>{alert('Создано!'); loadCountries();});
+    fetch(`${API}/api`,{
+      method:'POST',
+      headers:{'Content-Type':'application/json','Authorization':'Bearer '+TOKEN},
+      body: JSON.stringify({op:'create_country',name})
+    }).then(r=>r.json()).then(r=>{alert('Создано!'); loadCountries();});
   }
   if(op==='view-logs'){
     fetch(`${API}/logs`).then(r=>r.json()).then(data=>{
-      $('logs-view').textContent=data.map(l=>`${l.timestamp}: ${l.text}`).join('\n');
+      $('logs-view').textContent=data.map(l=>`${l.created_at}: ${l.text}`).join('\n');
       dlgLogs.showModal();
     });
   }
