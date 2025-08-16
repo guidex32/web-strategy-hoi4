@@ -50,7 +50,9 @@ async function verifyToken(req, res, next) {
     res.status(401).json({ok:false, message:'Invalid token'});
   }
 }
-
+app.post('/api/auth', async (req,res)=>{
+  console.log('POST /api/auth', req.body);
+  const {op, login, password} = req.body;
 // --- Auth routes ---
 app.post('/api/auth', async (req,res)=>{
   try {
