@@ -1,4 +1,4 @@
-const API = 'https://web-strategy-hoi4.onrender.com/api'; // Node сервер на Render
+const API = 'https://web-strategy-hoi4.onrender.com/api';
 let TOKEN = localStorage.getItem('token')||'';
 let USER = null;
 let COUNTRIES = [];
@@ -15,27 +15,29 @@ function hide(el){el.classList.add('hidden');}
 async function apiAuth(op,data){
   const res = await fetch(`${API}/auth`,{
     method:'POST',
-    headers:{'Content-Type':'application/json', 'Authorization': TOKEN?'Bearer '+TOKEN:'',},
+    headers:{'Content-Type':'application/json','Authorization':TOKEN?'Bearer '+TOKEN:''},
     body: JSON.stringify({op,...data})
   });
   return res.json();
 }
 
 async function checkSession(){
-  const r = await apiAuth('session',{});
-  if(r.user){
-    USER = r.user;
-    TOKEN = TOKEN || '';
-    localStorage.setItem('token',TOKEN);
-    $('user-info').textContent = USER.login+' ('+USER.role+')';
-    show($('user-info')); show($('btn-logout')); hide($('btn-login'));
-    if(USER.role!=='admin') hide($('admin-panel'));
-    else show($('admin-panel'));
-  }else{
-    USER = null;
-    hide($('user-info')); hide($('btn-logout')); show($('btn-login'));
-    hide($('admin-panel'));
-  }
+  try{
+    const r = await apiAuth('session',{});
+    if(r.user){
+      USER = r.user;
+      TOKEN = TOKEN || '';
+      localStorage.setItem('token',TOKEN);
+      $('user-info').textContent = USER.login+' ('+USER.role+')';
+      show($('user-info')); show($('btn-logout')); hide($('btn-login'));
+      if(USER.role!=='admin') hide($('admin-panel'));
+      else show($('admin-panel'));
+    }else{
+      USER = null;
+      hide($('user-info')); hide($('btn-logout')); show($('btn-login'));
+      hide($('admin-panel'));
+    }
+  }catch(e){console.error(e);}
 }
 
 // --- Login/Register ---
@@ -70,14 +72,15 @@ $('btn-signin').onclick=async e=>{
 
 // --- Countries ---
 async function apiCountries(){
-  const res = await fetch(`${API}/countries`,{
-    headers:{'Authorization':'Bearer '+TOKEN}
-  });
-  const data = await res.json();
-  COUNTRIES = Array.isArray(data) ? data : [];
-  updateInfo(null);
-  updateMap();
-  updatePoints();
+  try{
+    const res = await fetch(`${API}/countries`,{headers:{'Authorization':'Bearer '+TOKEN}});
+    const data = await res.json();
+    if(!Array.isArray(data)) return console.error('Invalid countries',data);
+    COUNTRIES = data;
+    updateInfo(null);
+    updateMap();
+    updatePoints();
+  }catch(e){console.error(e);}
 }
 
 async function loadCountries(){ await apiCountries(); }
@@ -111,10 +114,12 @@ function updatePoints(){
 function updateMap(){
   const svg = $('map').contentDocument;
   if(!svg) return;
-  COUNTRIES.forEach(c=>{
-    const p = svg.getElementById(c.name);
-    if(p){
+  svg.querySelectorAll('path').forEach(p=>{
+    const c = COUNTRIES.find(x=>x.name === p.id);
+    if(c){
       p.style.fill = c.owner ? '#4cc9f0' : '#12151b';
+    } else {
+      p.style.fill = '#12151b';
     }
   });
 }
@@ -124,9 +129,9 @@ async function doAction(action,el){
   if(!USER) { alert('Нужна авторизация'); return;}
   const cost = parseInt(el.dataset.cost||0);
   const unit = el.dataset.unit;
-  const countryId = COUNTRIES[0]?.id || 1;
+  const countryId = COUNTRIES[0]?.id || 1; // пока первая страна
   if(action==='buy-unit'){
-    const res = await fetch(`${API}/action`,{
+    const res = await fetch(`${API}`,{
       method:'POST',
       headers:{'Content-Type':'application/json','Authorization':'Bearer '+TOKEN},
       body: JSON.stringify({op:'buy_unit',countryId,unit,cost})
@@ -137,7 +142,7 @@ async function doAction(action,el){
   }
   if(action==='declare-war'){
     const defenderId=prompt('ID страны для войны?');
-    const res = await fetch(`${API}/action`,{
+    const res = await fetch(`${API}`,{
       method:'POST',
       headers:{'Content-Type':'application/json','Authorization':'Bearer '+TOKEN},
       body: JSON.stringify({op:'declare_war',attackerId:countryId,defenderId})
@@ -148,7 +153,7 @@ async function doAction(action,el){
   }
   if(action==='attack'){
     const defenderId=prompt('ID страны для атаки?');
-    const res = await fetch(`${API}/action`,{
+    const res = await fetch(`${API}`,{
       method:'POST',
       headers:{'Content-Type':'application/json','Authorization':'Bearer '+TOKEN},
       body: JSON.stringify({op:'attack',attackerId:countryId,defenderId})
@@ -167,14 +172,19 @@ $('admin-panel').onclick=e=>{
   if(op==='create-country'){
     const name=prompt('Название страны?');
     if(!name) return;
-    fetch(`${API}/admin`,{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+TOKEN},
-      body: JSON.stringify({op:'create_country',name})}).then(r=>r.json()).then(r=>{alert('Создано!'); loadCountries();});
+    fetch(`${API}`,{
+      method:'POST',
+      headers:{'Content-Type':'application/json','Authorization':'Bearer '+TOKEN},
+      body: JSON.stringify({op:'create_country',name})
+    }).then(r=>r.json()).then(r=>{alert('Создано!'); loadCountries();});
   }
   if(op==='view-logs'){
-    fetch(`${API}/logs`,{headers:{'Authorization':'Bearer '+TOKEN}}).then(r=>r.json()).then(data=>{
-      $('logs-view').textContent=data.map(l=>`${l.timestamp}: ${l.text}`).join('\n');
-      dlgLogs.showModal();
-    });
+    fetch(`${API}/logs`,{headers:{'Authorization':'Bearer '+TOKEN}})
+      .then(r=>r.json())
+      .then(data=>{
+        $('logs-view').textContent=data.map(l=>`${l.timestamp}: ${l.text}`).join('\n');
+        dlgLogs.showModal();
+      });
   }
 };
 
