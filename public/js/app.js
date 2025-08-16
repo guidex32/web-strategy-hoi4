@@ -1,4 +1,4 @@
-const API = 'http://localhost:3000'; // или твой реальный хост
+const API = '51.38.13.75'; // или твой реальный хост
 let TOKEN = localStorage.getItem('token')||'';
 let USER = null;
 let COUNTRIES = [];
