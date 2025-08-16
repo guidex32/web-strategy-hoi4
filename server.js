@@ -11,6 +11,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+app.use(express.static(path.join(__dirname, 'public')));
 // ======= Настройки MySQL =======
 const pool = mysql.createPool({
   host: '51.38.13.75',    
