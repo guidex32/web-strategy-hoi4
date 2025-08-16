@@ -1,73 +1,186 @@
-/* общий сброс и шрифты */
-* { box-sizing: border-box; }
-html, body { margin:0; padding:0; height:100%; font-family: system-ui, Segoe UI, Roboto, Arial, sans-serif; background: #0f1115; color: #f6f7f9; }
-
-/* цвета и переменные */
-:root {
-  --panel: #171a21;
-  --muted: #a9b0bd;
-  --primary: #4cc9f0;
-  --warn: #ffb703;
-  --border: #2a2f3a;
+/* --- Общие стили --- */
+body {
+  margin: 0;
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  background: #f0f2f5;
+  color: #333;
 }
 
-/* топбар */
-.topbar {
-  display:flex; justify-content:space-between; align-items:center;
-  padding:10px 14px; background:#12151b; border-bottom:1px solid var(--border);
-  position:sticky; top:0; z-index:10;
+.hidden {
+  display: none !important;
 }
-.brand { font-weight:700; letter-spacing:.5px; }
-.nav { display:flex; gap:8px; align-items:center; }
 
-/* кнопки */
-.btn {
-  padding:8px 10px; border-radius:10px; border:1px solid var(--border);
-  background:#1c212b; color:#f6f7f9; cursor:pointer;
+button {
+  cursor: pointer;
+  border: none;
+  border-radius: 5px;
+  padding: 6px 12px;
+  background: #007bff;
+  color: #fff;
+  font-size: 14px;
+  transition: background 0.2s;
 }
-.btn:hover { filter: brightness(1.2); }
-.btn-primary { background:var(--primary); border-color:#2b90b9; color:#001018; }
-.btn-warn { background:var(--warn); color:#241a00; }
-.btn-ghost { background:transparent; }
 
-/* скрытый элемент */
-.hidden { display:none !important; }
+button:hover {
+  background: #0056b3;
+}
 
-/* layout */
-.layout {
-  display:grid; grid-template-columns:260px 1fr 260px; gap:12px; padding:12px;
+/* --- Header --- */
+header {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  padding: 10px 20px;
+  background: #222;
+  color: #fff;
 }
-.panel {
-  background:var(--panel); border:1px solid var(--border); border-radius:14px; padding:12px;
-  min-height:200px;
-}
-.stack { display:flex; flex-direction:column; gap:8px; }
-.row { display:flex; gap:8px; align-items:center; }
 
-/* карта */
-.map-wrap {
-  position:relative; background:#0b0e13; border:1px solid var(--border);
-  border-radius:14px; overflow:hidden; min-height:60vh;
-  display:flex; justify-content:center; align-items:center;
+header button {
+  margin-left: 10px;
 }
+
+/* --- Main --- */
+main {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 20px;
+}
+
+/* --- Points --- */
+#points {
+  font-size: 18px;
+  font-weight: bold;
+  margin-bottom: 15px;
+}
+
+/* --- Map --- */
 #map {
-  width:auto; height:auto; max-width:100%; max-height:100%;
-  display:block;
+  width: 80%;
+  max-width: 1000px;
+  height: 500px;
+  border: 2px solid #333;
+  border-radius: 10px;
+  margin-bottom: 20px;
+  background: #fff;
+  box-shadow: 0 0 10px rgba(0,0,0,0.2);
 }
 
-/* тултипы */
+/* --- Tooltip --- */
 .tooltip {
-  position:absolute; background:#0b0e13; border:1px solid var(--border);
-  border-radius:10px; padding:6px 8px; font-size:12px; color:var(--muted);
-  pointer-events:none; transform:translate(-50%,-120%);
+  position: absolute;
+  background: rgba(0,0,0,0.85);
+  color: #fff;
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 14px;
+  pointer-events: none;
+  z-index: 1000;
+  white-space: nowrap;
 }
 
-/* инфо блок */
-.info {
-  font-size:14px; color:var(--muted); display:grid; gap:6px;
-  padding:10px; background:var(--panel); border-radius:10px;
+/* --- Info блок --- */
+#info {
+  background: #fff;
+  padding: 15px;
+  border-radius: 12px;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.15);
+  width: 320px;
+  margin-bottom: 20px;
 }
 
-/* действия */
-.actions { display:grid; gap:8px; margin-top:6px; }
-.admin { margin-top:8px; padding-top:8px; border-top:1px dashed var(--border); }
+#info h3 {
+  margin: 0 0 10px 0;
+  font-size: 20px;
+  color: #007bff;
+}
+
+#info p {
+  margin: 5px 0;
+  font-size: 14px;
+}
+
+/* --- Actions --- */
+#actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  margin-bottom: 20px;
+}
+
+#actions .btn {
+  margin: 5px;
+}
+
+/* --- Admin Panel --- */
+#admin-panel {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  background: #fff;
+  padding: 10px;
+  border-radius: 12px;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.15);
+}
+
+#admin-panel .btn {
+  margin: 5px;
+  background: #28a745;
+}
+
+#admin-panel .btn:hover {
+  background: #1e7e34;
+}
+
+/* --- Dialog Auth --- */
+dialog#dlg-auth {
+  border: none;
+  border-radius: 12px;
+  padding: 20px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.25);
+}
+
+dialog#dlg-auth input {
+  display: block;
+  width: 250px;
+  margin: 10px auto;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid #ccc;
+  font-size: 14px;
+}
+
+dialog#dlg-auth button {
+  display: block;
+  width: 120px;
+  margin: 10px auto;
+}
+
+/* --- Logs --- */
+#dlg-logs {
+  width: 400px;
+  max-height: 500px;
+  overflow-y: auto;
+  padding: 15px;
+  border-radius: 12px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.25);
+  background: #fff;
+}
+
+/* --- Responsive --- */
+@media(max-width: 900px) {
+  #map {
+    width: 95%;
+    height: 400px;
+  }
+
+  #info {
+    width: 90%;
+  }
+}
+
+@media(max-width: 600px) {
+  #actions, #admin-panel {
+    flex-direction: column;
+  }
+}
