@@ -1,4 +1,4 @@
-const API = 'https://web-strategy-hoi4.onrender.com/api'; 
+const API = 'https://web-strategy-hoi4.onrender.com/api';
 let TOKEN = localStorage.getItem('token') || '';
 let USER = null;
 let COUNTRIES = [];
@@ -67,18 +67,19 @@ $('btn-signin').onclick=async e=>{
     localStorage.setItem('token', TOKEN);
     USER=r.user;
     dlgAuth.close();
-    checkSession();
-    loadCountries();
+    await checkSession();
+    await loadCountries(); // сначала получаем страны
   } else alert(r.message);
 };
 
 // --- Countries ---
 async function apiCountries(){
+  if(!TOKEN) return; // защита
   const res = await fetch(`${API}/countries`,{
     headers:{ 'Authorization':'Bearer '+TOKEN }
   });
   const data = await res.json();
-  if(!Array.isArray(data)) {
+  if(!Array.isArray(data)){
     console.error('Invalid countries', data);
     return;
   }
@@ -98,9 +99,16 @@ function updateInfo(countryId){
   const infoArmy=$('info-army');
   const infoStatus=$('info-status');
 
-  if(!countryId){ infoCountry.textContent='—'; infoOwner.textContent='—'; infoEcon.textContent='0'; infoArmy.textContent='нет'; infoStatus.textContent='мир'; return;}
+  if(!countryId){ 
+    infoCountry.textContent='—'; 
+    infoOwner.textContent='—'; 
+    infoEcon.textContent='0'; 
+    infoArmy.textContent='нет'; 
+    infoStatus.textContent='мир'; 
+    return;
+  }
 
-  const c = COUNTRIES.find(x=>x.id==countryId);
+  const c = Array.isArray(COUNTRIES) ? COUNTRIES.find(x=>x.id==countryId) : null;
   if(!c) return;
   infoCountry.textContent=c.name;
   infoOwner.textContent=c.owner||'—';
@@ -111,14 +119,14 @@ function updateInfo(countryId){
 }
 
 function updatePoints(){
-  const total = COUNTRIES.reduce((a,c)=>a+(c.points||0),0);
+  const total = Array.isArray(COUNTRIES) ? COUNTRIES.reduce((a,c)=>a+(c.points||0),0) : 0;
   $('points').textContent = 'Очки: '+total;
 }
 
 // --- Map ---
 function updateMap(){
   const svg = $('map').contentDocument;
-  if(!svg || !Array.isArray(COUNTRIES)) return;
+  if(!svg || !Array.isArray(COUNTRIES) || COUNTRIES.length===0) return;
   svg.querySelectorAll('path').forEach(p=>{
     const c = COUNTRIES.find(x=>x.name === p.id);
     if(c){
@@ -131,7 +139,7 @@ function updateMap(){
 
 // --- Actions ---
 async function doAction(action,el){
-  if(!USER) { alert('Нужна авторизация'); return;}
+  if(!USER) { alert('Нужна авторизация'); return; }
   const cost = parseInt(el.dataset.cost||0);
   const unit = el.dataset.unit;
   const countryId = COUNTRIES[0]?.id || 1;
@@ -153,9 +161,16 @@ async function doAction(action,el){
     headers:{'Content-Type':'application/json','Authorization':'Bearer '+TOKEN},
     body: JSON.stringify(body)
   });
+
   const r = await res.json();
-  if(r.ok) alert(action==='attack'?'Атака прошла!':'Успешно!'); 
-  else alert(r.message);
+  if(r.ok){
+    alert(action==='attack' ? 'Атака прошла!' : 'Успешно!');
+  } else {
+    alert(r.message);
+    if(r.message==='Invalid token'){
+      TOKEN=''; localStorage.removeItem('token'); checkSession();
+    }
+  }
   await loadCountries();
 }
 
@@ -184,7 +199,7 @@ $('admin-panel').onclick=e=>{
 // --- Map hover ---
 $('map').addEventListener('load',()=>{
   const svg = $('map').contentDocument;
-  if(!svg) return;
+  if(!svg || !Array.isArray(COUNTRIES)) return;
   svg.querySelectorAll('path').forEach(p=>{
     p.addEventListener('mouseenter',e=>{
       const id = p.id;
