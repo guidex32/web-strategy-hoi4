@@ -1,4 +1,4 @@
-const API = 'https://web-strategy-hoi4.onrender.com'; // твой Node сервер на Render
+const API = 'https://web-strategy-hoi4.onrender.com'; // твой Node сервер на Render  
 let TOKEN = localStorage.getItem('token')||'';
 let USER = null;
 let COUNTRIES = [];
@@ -13,9 +13,9 @@ function hide(el){el.classList.add('hidden');}
 
 // --- Auth ---
 async function apiAuth(op,data){
-  const res = await fetch(`${API}/auth`,{
+  const res = await fetch(`${API}/api/auth`,{
     method:'POST',
-    headers:{'Content-Type':'application/json', 'Authorization': TOKEN?'Bearer '+TOKEN:''},
+    headers:{'Content-Type':'application/json', 'Authorization': TOKEN?'Bearer '+TOKEN:'',},
     body: JSON.stringify({op,...data})
   });
   return res.json();
@@ -70,7 +70,9 @@ $('btn-signin').onclick=async e=>{
 
 // --- Countries ---
 async function apiCountries(){
-  const res = await fetch(`${API}/countries`);
+  const res = await fetch(`${API}/api/countries`,{
+    headers:{'Authorization':'Bearer '+TOKEN}
+  });
   const data = await res.json();
   COUNTRIES = data;
   updateInfo(null);
@@ -104,6 +106,105 @@ function updatePoints(){
   const total = COUNTRIES.reduce((a,c)=>a+(c.points||0),0);
   $('points').textContent = 'Очки: '+total;
 }
+
+// --- Map ---
+function updateMap(){
+  const svg = $('map').contentDocument;
+  if(!svg) return;
+  svg.querySelectorAll('path').forEach(p=>{
+    const c = COUNTRIES.find(x=>x.name === p.id);
+    if(c){
+      p.style.fill = c.owner ? '#4cc9f0' : '#12151b';
+    } else {
+      p.style.fill = '#12151b';
+    }
+  });
+}
+
+// --- Actions ---
+async function doAction(action,el){
+  if(!USER) { alert('Нужна авторизация'); return;}
+  const cost = parseInt(el.dataset.cost||0);
+  const unit = el.dataset.unit;
+  const countryId = COUNTRIES[0]?.id || 1; // пока выбираем первую страну
+  if(action==='buy-unit'){
+    const res = await fetch(`${API}/api`,{
+      method:'POST',
+      headers:{'Content-Type':'application/json','Authorization':'Bearer '+TOKEN},
+      body: JSON.stringify({op:'buy_unit',countryId,unit,cost})
+    });
+    const r=await res.json();
+    if(r.ok){ alert('Куплено!'); await loadCountries();}
+    else alert(r.message);
+  }
+  if(action==='declare-war'){
+    const defenderId=prompt('ID страны для войны?');
+    const res = await fetch(`${API}/api`,{
+      method:'POST',
+      headers:{'Content-Type':'application/json','Authorization':'Bearer '+TOKEN},
+      body: JSON.stringify({op:'declare_war',attackerId:countryId,defenderId})
+    });
+    const r=await res.json();
+    alert(r.ok?'Война объявлена!':r.message);
+    await loadCountries();
+  }
+  if(action==='attack'){
+    const defenderId=prompt('ID страны для атаки?');
+    const res = await fetch(`${API}/api`,{
+      method:'POST',
+      headers:{'Content-Type':'application/json','Authorization':'Bearer '+TOKEN},
+      body: JSON.stringify({op:'attack',attackerId:countryId,defenderId})
+    });
+    const r=await res.json();
+    alert(r.ok?'Атака прошла! Потери врага: '+r.lost:r.message);
+    await loadCountries();
+  }
+}
+
+// --- Admin ---
+$('admin-panel').onclick=e=>{
+  const btn=e.target.closest('button');
+  if(!btn) return;
+  const op=btn.dataset.admin;
+  if(op==='create-country'){
+    const name=prompt('Название страны?');
+    if(!name) return;
+    fetch(`${API}/api`,{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+TOKEN},
+      body: JSON.stringify({op:'create_country',name})}).then(r=>r.json()).then(r=>{alert('Создано!'); loadCountries();});
+  }
+  if(op==='view-logs'){
+    fetch(`${API}/logs`,{headers:{'Authorization':'Bearer '+TOKEN}}).then(r=>r.json()).then(data=>{
+      $('logs-view').textContent=data.map(l=>`${l.timestamp}: ${l.text}`).join('\n');
+      dlgLogs.showModal();
+    });
+  }
+};
+
+// --- Map hover ---
+$('map').addEventListener('load',()=>{
+  const svg = $('map').contentDocument;
+  if(!svg) return;
+  svg.querySelectorAll('path').forEach(p=>{
+    p.addEventListener('mouseenter',e=>{
+      const id = p.id;
+      const c = COUNTRIES.find(x=>x.name===id);
+      if(c){
+        const tip=$('tooltip');
+        tip.textContent=c.name;
+        tip.style.left=e.pageX+'px';
+        tip.style.top=e.pageY+'px';
+        show(tip);
+        updateInfo(c.id);
+      }
+    });
+    p.addEventListener('mouseleave',()=>{hide($('tooltip')); updateInfo(null);});
+  });
+});
+
+// --- Global action buttons ---
+document.querySelectorAll('[data-action]').forEach(btn=>{
+  btn.onclick=()=>doAction(btn.dataset.action,btn);
+});
 
 // --- Init ---
 checkSession();
