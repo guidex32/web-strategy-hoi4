@@ -15,28 +15,27 @@ function hide(el){el.classList.add('hidden');}
 async function apiAuth(op,data){
   const res = await fetch(`${API}/auth`,{
     method:'POST',
-    headers:{'Content-Type':'application/json', 'Authorization': TOKEN?'Bearer '+TOKEN:'',},
+    headers:{'Content-Type':'application/json', 'Authorization': TOKEN?'Bearer '+TOKEN:''},
     body: JSON.stringify({op,...data})
   });
   return res.json();
 }
 
 async function checkSession(){
-  if(!TOKEN) return;
-  try {
-    const r = await apiAuth('session',{});
-    if(r.user){
-      USER = r.user;
-      $('user-info').textContent = USER.login+' ('+USER.role+')';
-      show($('user-info')); show($('btn-logout')); hide($('btn-login'));
-      if(USER.role!=='admin') hide($('admin-panel'));
-      else show($('admin-panel'));
-    } else {
-      USER = null;
-      hide($('user-info')); hide($('btn-logout')); show($('btn-login'));
-      hide($('admin-panel'));
-    }
-  } catch(err){ console.error(err); }
+  const r = await apiAuth('session',{});
+  if(r.user){
+    USER = r.user;
+    TOKEN = TOKEN || '';
+    localStorage.setItem('token',TOKEN);
+    $('user-info').textContent = USER.login+' ('+USER.role+')';
+    show($('user-info')); show($('btn-logout')); hide($('btn-login'));
+    if(USER.role!=='admin') hide($('admin-panel'));
+    else show($('admin-panel'));
+  }else{
+    USER = null;
+    hide($('user-info')); hide($('btn-logout')); show($('btn-login'));
+    hide($('admin-panel'));
+  }
 }
 
 // --- Login/Register ---
@@ -52,7 +51,7 @@ $('btn-register').onclick=async e=>{
   const login=$('auth-username').value.trim();
   const pass=$('auth-password').value.trim();
   const r = await apiAuth('register',{login,password:pass});
-  alert(r.msg || r.message);
+  alert(r.message);
 };
 $('btn-signin').onclick=async e=>{
   e.preventDefault();
@@ -60,13 +59,13 @@ $('btn-signin').onclick=async e=>{
   const pass=$('auth-password').value.trim();
   const r = await apiAuth('login',{login,password:pass});
   if(r.ok){
-    TOKEN=r.token || '';
+    TOKEN=r.token;
     localStorage.setItem('token',TOKEN);
     USER=r.user;
     dlgAuth.close();
     checkSession();
     loadCountries();
-  }else alert(r.msg || r.message);
+  }else alert(r.message);
 };
 
 // --- Countries ---
@@ -105,94 +104,6 @@ function updatePoints(){
   const total = COUNTRIES.reduce((a,c)=>a+(c.points||0),0);
   $('points').textContent = 'Очки: '+total;
 }
-
-// --- Actions ---
-async function doAction(action,el){
-  if(!USER) { alert('Нужна авторизация'); return;}
-  const cost = parseInt(el.dataset.cost||0);
-  const unit = el.dataset.unit;
-  const countryId = COUNTRIES[0]?.id || 1; // пока выбираем первую страну
-  if(action==='buy-unit'){
-    const res = await fetch(`${API}/api`,{
-      method:'POST',
-      headers:{'Content-Type':'application/json','Authorization':'Bearer '+TOKEN},
-      body: JSON.stringify({op:'buy_unit',countryId,unit,cost})
-    });
-    const r=await res.json();
-    if(r.ok){ alert('Куплено!'); await loadCountries();}
-    else alert(r.msg || r.message);
-  }
-  if(action==='declare-war'){
-    const defenderId=prompt('ID страны для войны?');
-    const res = await fetch(`${API}/api`,{
-      method:'POST',
-      headers:{'Content-Type':'application/json','Authorization':'Bearer '+TOKEN},
-      body: JSON.stringify({op:'declare_war',attackerId:countryId,defenderId})
-    });
-    const r=await res.json();
-    alert(r.ok?'Война объявлена!':r.msg || r.message);
-    await loadCountries();
-  }
-  if(action==='attack'){
-    const defenderId=prompt('ID страны для атаки?');
-    const res = await fetch(`${API}/api`,{
-      method:'POST',
-      headers:{'Content-Type':'application/json','Authorization':'Bearer '+TOKEN},
-      body: JSON.stringify({op:'attack',attackerId:countryId,defenderId})
-    });
-    const r=await res.json();
-    alert(r.ok?'Атака прошла! Потери врага: '+r.lost:r.msg || r.message);
-    await loadCountries();
-  }
-}
-
-// --- Admin ---
-$('admin-panel').onclick=e=>{
-  const btn=e.target.closest('button');
-  if(!btn) return;
-  const op=btn.dataset.admin;
-  if(op==='create-country'){
-    const name=prompt('Название страны?');
-    if(!name) return;
-    fetch(`${API}/api`,{
-      method:'POST',
-      headers:{'Content-Type':'application/json','Authorization':'Bearer '+TOKEN},
-      body: JSON.stringify({op:'create_country',name})
-    }).then(r=>r.json()).then(r=>{alert('Создано!'); loadCountries();});
-  }
-  if(op==='view-logs'){
-    fetch(`${API}/logs`).then(r=>r.json()).then(data=>{
-      $('logs-view').textContent=data.map(l=>`${l.created_at}: ${l.text}`).join('\n');
-      dlgLogs.showModal();
-    });
-  }
-};
-
-// --- Map hover ---
-$('map').addEventListener('load',()=>{
-  const svg = $('map').contentDocument;
-  if(!svg) return;
-  svg.querySelectorAll('path').forEach(p=>{
-    p.addEventListener('mouseenter',e=>{
-      const id = p.id;
-      const c = COUNTRIES.find(x=>x.name===id);
-      if(c){
-        const tip=$('tooltip');
-        tip.textContent=c.name;
-        tip.style.left=e.pageX+'px';
-        tip.style.top=e.pageY+'px';
-        show(tip);
-        updateInfo(c.id);
-      }
-    });
-    p.addEventListener('mouseleave',()=>{hide($('tooltip')); updateInfo(null);});
-  });
-});
-
-// --- Global action buttons ---
-document.querySelectorAll('[data-action]').forEach(btn=>{
-  btn.onclick=()=>doAction(btn.dataset.action,btn);
-});
 
 // --- Init ---
 checkSession();
