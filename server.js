@@ -1,143 +1,82 @@
 const express = require('express');
-const cors = require('cors');
-const mysql = require('mysql2/promise');
-const bodyParser = require('body-parser');
-const path = require('path');
-const jwt = require('jsonwebtoken');
-
+const fs = require('fs');
 const app = express();
 const PORT = process.env.PORT || 3000;
+app.use(express.json());
+app.use(express.static('public'));
 
-// --- MySQL ---
-const dbConfig = {
-  host: '51.38.13.75',
-  user: 'gs10071',
-  password: 'fCEJNemIUB',
-  database: 'gs10071',
-  port: 3306,
-};
+let users = JSON.parse(fs.readFileSync('data/users.json','utf-8')); // {login,password,role,token}
+let countries = JSON.parse(fs.readFileSync('data/countries.json','utf-8')); // {id,name,x,y,owner,economy,army,points,status}
+let logs = [];
 
-let pool;
-(async () => { pool = await mysql.createPool(dbConfig); })();
+function saveUsers(){ fs.writeFileSync('data/users.json',JSON.stringify(users,null,2)); }
+function saveCountries(){ fs.writeFileSync('data/countries.json',JSON.stringify(countries,null,2)); }
 
-// --- Middleware ---
-app.use(cors());
-app.use(bodyParser.json());
-app.use(express.static(path.join(__dirname, 'public')));
+function genToken(){ return Math.random().toString(36).substr(2); }
+function findUserByToken(token){ return users.find(u=>u.token===token); }
 
-const SECRET = 'supersecretkey123';
-
-// --- Helper: verify token ---
-async function verifyToken(req, res, next) {
-  const header = req.headers['authorization'];
-  if(!header) return res.status(401).json({ok:false, message:'No token'});
-  const token = header.split(' ')[1];
-  try {
-    const decoded = jwt.verify(token, SECRET);
-    req.user = decoded;
-    next();
-  } catch(e) {
-    res.status(401).json({ok:false, message:'Invalid token'});
-  }
-}
-
-// --- Auth routes ---
-app.post('/api/auth', async (req,res)=>{
-  const {op, login, password} = req.body;
+app.post('/api/auth',(req,res)=>{
+  const {op,login,password} = req.body;
   if(op==='register'){
-    try{
-      const [rows] = await pool.query('SELECT * FROM users WHERE login=?',[login]);
-      if(rows.length) return res.json({ok:false, message:'Логин занят'});
-      await pool.query('INSERT INTO users(login,password,role) VALUES(?,?,?)',[login,password,'user']);
-      return res.json({ok:true, message:'Регистрация прошла успешно'});
-    }catch(e){return res.json({ok:false, message:e.message});}
+    if(users.find(u=>u.login===login)) return res.json({ok:false,message:'Логин занят'});
+    const user = {login,password,role:'player',token:genToken()};
+    users.push(user); saveUsers();
+    return res.json({ok:true,user});
   }
   if(op==='login'){
-    try{
-      const [rows] = await pool.query('SELECT * FROM users WHERE login=? AND password=?',[login,password]);
-      if(rows.length===0) return res.json({ok:false, message:'Неверный логин или пароль'});
-      const user = rows[0];
-      const token = jwt.sign({id:user.id, login:user.login, role:user.role}, SECRET);
-      return res.json({ok:true, token, user});
-    }catch(e){return res.json({ok:false, message:e.message});}
+    const user = users.find(u=>u.login===login && u.password===password);
+    if(!user) return res.json({ok:false,message:'Неверные данные'});
+    user.token=genToken(); saveUsers();
+    return res.json({ok:true,user,token:user.token});
   }
   if(op==='session'){
-    try{
-      const header = req.headers['authorization'];
-      if(!header) return res.json({ok:true, user:null});
-      const token = header.split(' ')[1];
-      const decoded = jwt.verify(token, SECRET);
-      return res.json({ok:true, user:decoded, token});
-    }catch(e){return res.json({ok:true, user:null});}
+    const token = req.headers['authorization']?.split(' ')[1];
+    const user = findUserByToken(token);
+    if(user) return res.json({user,token});
+    return res.json({ok:false});
   }
+  res.json({ok:false});
 });
 
-// --- Countries ---
-app.get('/api/countries', verifyToken, async (req,res)=>{
-  try{
-    const [rows] = await pool.query('SELECT * FROM countries');
-    const countries = {};
-    rows.forEach(r=>{ countries[r.id]=r; });
-    res.json(countries);
-  }catch(e){res.json({ok:false,message:e.message});}
+app.get('/api/countries',(req,res)=>{
+  const token = req.headers['authorization']?.split(' ')[1];
+  if(!findUserByToken(token)) return res.json([]);
+  res.json(countries);
 });
 
-// --- Actions ---
-app.post('/api', verifyToken, async (req,res)=>{
-  const {op, countryId, unit, cost, attackerId, defenderId, name, login} = req.body;
-  try{
-    // fetch country
-    const [rows] = await pool.query('SELECT * FROM countries WHERE id=?',[countryId||attackerId||defenderId]);
-    if(rows.length===0 && op!=='create_country') return res.json({ok:false,message:'Страна не найдена'});
-    const country = rows[0];
+app.post('/api',(req,res)=>{
+  const token = req.headers['authorization']?.split(' ')[1];
+  const user = findUserByToken(token);
+  if(!user) return res.json({ok:false,message:'Нет доступа'});
+  const {op,...data} = req.body;
 
-    if(op==='buy_unit'){
-      if(req.user.role!=='admin' && req.user.login!==country.owner) return res.status(403).json({ok:false,message:'Не твоя страна'});
-      let army = JSON.parse(country.army||'{}');
-      army[unit] = (army[unit]||0)+1;
-      await pool.query('UPDATE countries SET army=? WHERE id=?',[JSON.stringify(army),country.id]);
-      return res.json({ok:true});
-    }
-
-    if(op==='declare_war'){
-      if(req.user.role!=='admin' && req.user.login!==country.owner) return res.status(403).json({ok:false,message:'Не твоя страна'});
-      await pool.query('UPDATE countries SET status=? WHERE id=?',['war',defenderId]);
-      return res.json({ok:true});
-    }
-
-    if(op==='attack'){
-      if(req.user.role!=='admin' && req.user.login!==country.owner) return res.status(403).json({ok:false,message:'Не твоя страна'});
-      const [defRows] = await pool.query('SELECT * FROM countries WHERE id=?',[defenderId]);
-      if(defRows.length===0) return res.json({ok:false,message:'Цель не найдена'});
-      let points = defRows[0].points || 0;
-      points = Math.max(points-10,0);
-      await pool.query('UPDATE countries SET points=? WHERE id=?',[points,defenderId]);
-      return res.json({ok:true,lost:10});
-    }
-
-    if(op==='create_country'){
-      if(req.user.role!=='admin') return res.status(403).json({ok:false,message:'Только админ'});
-      await pool.query('INSERT INTO countries(name,economy,army,status,points,owner) VALUES(?,?,?,?,?,?)',[name,0,'{}','peace',0,null]);
-      return res.json({ok:true});
-    }
-
-    res.json({ok:false,message:'Неизвестная операция'});
-  }catch(e){res.json({ok:false,message:e.message});}
+  if(op==='create_country'){
+    if(user.role!=='owner') return res.json({ok:false,message:'Только овнер'});
+    const id = Date.now().toString();
+    const newC = {...data,id,owner:user.login,economy:0,army:{tank:0,pvo:0},points:0,status:'мир'};
+    countries.push(newC); saveCountries();
+    logs.push({time:Date.now(),action:'create_country',user:user.login,name:data.name});
+    return res.json({ok:true});
+  }
+  if(op==='assign_owner'){
+    if(user.role!=='owner') return res.json({ok:false,message:'Только овнер'});
+    const c = countries.find(c=>c.id===data.countryId); if(!c) return res.json({ok:false,message:'Страна не найдена'});
+    c.owner = data.login; saveCountries();
+    logs.push({time:Date.now(),action:'assign_owner',user:user.login,countryId:data.countryId,newOwner:data.login});
+    return res.json({ok:true});
+  }
+  if(op==='give_points'){
+    const c = countries.find(c=>c.id===data.countryId); if(!c) return res.json({ok:false,message:'Страна не найдена'});
+    c.points = (c.points||0)+parseInt(data.amount); saveCountries();
+    logs.push({time:Date.now(),action:'give_points',user:user.login,countryId:data.countryId,amount:data.amount});
+    return res.json({ok:true});
+  }
+  if(op==='logs'){
+    if(user.role!=='admin' && user.role!=='owner') return res.json({ok:false,message:'Нет доступа'});
+    return res.json({logs});
+  }
+  // сюда можно добавить остальные операции (экономика, армия, атака)
+  res.json({ok:false,message:'Неизвестная операция'});
 });
 
-// --- Logs ---
-app.get('/logs', verifyToken, async (req,res)=>{
-  if(req.user.role!=='admin') return res.json([]);
-  try{
-    const [rows] = await pool.query('SELECT * FROM logs ORDER BY timestamp DESC');
-    res.json(rows);
-  }catch(e){res.json([]);}
-});
-
-// --- Front ---
-app.get('*',(req,res)=>{
-  res.sendFile(path.join(__dirname,'public','index.html'));
-});
-
-// --- Start ---
-app.listen(PORT, ()=>console.log('Server running on port '+PORT));
+app.listen(PORT,()=>console.log('Server running on',PORT));
