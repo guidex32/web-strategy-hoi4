@@ -18,9 +18,7 @@ const dbConfig = {
 };
 
 let pool;
-(async () => {
-  pool = await mysql.createPool(dbConfig);
-})();
+(async () => { pool = await mysql.createPool(dbConfig); })();
 
 // --- Middleware ---
 app.use(cors());
@@ -46,6 +44,7 @@ async function verifyToken(req, res, next) {
 // --- Auth routes ---
 app.post('/api/auth', async (req,res)=>{
   const {op, login, password} = req.body;
+
   if(op==='register'){
     try{
       const [rows] = await pool.query('SELECT * FROM users WHERE login=?',[login]);
@@ -54,8 +53,9 @@ app.post('/api/auth', async (req,res)=>{
       const [newUser] = await pool.query('SELECT * FROM users WHERE login=?',[login]);
       const token = jwt.sign({id:newUser[0].id, login:newUser[0].login, role:newUser[0].role}, SECRET);
       return res.json({ok:true, token, user:newUser[0]});
-    }catch(e){return res.json({ok:false, message:e.message});}
+    }catch(e){ return res.json({ok:false, message:e.message}); }
   }
+
   if(op==='login'){
     try{
       const [rows] = await pool.query('SELECT * FROM users WHERE login=? AND password=?',[login,password]);
@@ -63,13 +63,14 @@ app.post('/api/auth', async (req,res)=>{
       const user = rows[0];
       const token = jwt.sign({id:user.id, login:user.login, role:user.role}, SECRET);
       return res.json({ok:true, token, user});
-    }catch(e){return res.json({ok:false, message:e.message});}
+    }catch(e){ return res.json({ok:false, message:e.message}); }
   }
+
   if(op==='session'){
     try{
-      const user = req.user;
-      return res.json({ok:true, user});
-    }catch(e){return res.json({ok:false});}
+      if(!req.user) return res.json({ok:false});
+      return res.json({ok:true, user:req.user});
+    }catch(e){ return res.json({ok:false}); }
   }
 });
 
@@ -89,10 +90,10 @@ app.get('/api/countries', verifyToken, async (req,res)=>{
         points:c.points,
         x:c.x || 0,
         y:c.y || 0
-      }
+      };
     });
     res.json(countries);
-  }catch(e){res.json({ok:false,message:e.message});}
+  }catch(e){ res.json({ok:false,message:e.message}); }
 });
 
 // --- Actions ---
@@ -168,16 +169,16 @@ app.post('/api', verifyToken, async (req,res)=>{
     }
 
     res.json({ok:false,message:'Неизвестная операция'});
-  }catch(e){res.json({ok:false,message:e.message});}
+  }catch(e){ res.json({ok:false,message:e.message}); }
 });
 
 // --- Logs ---
 app.get('/logs', verifyToken, async (req,res)=>{
-  if(req.user.role!=='admin') return res.json([]);
+  if(!req.user || req.user.role!=='admin') return res.json([]);
   try{
     const [rows] = await pool.query('SELECT * FROM logs ORDER BY timestamp DESC');
     res.json(rows);
-  }catch(e){res.json([]);}
+  }catch(e){ res.json([]); }
 });
 
 // --- Front ---
