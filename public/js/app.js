@@ -25,10 +25,11 @@ async function apiAuth(op, data){
 }
 
 async function checkSession(){
+  if(!TOKEN) return;
   const r = await apiAuth('session',{});
   if(r.user){
     USER = r.user;
-    TOKEN = TOKEN || r.token || '';
+    TOKEN = r.token || TOKEN; // обновляем токен с сервера
     localStorage.setItem('token', TOKEN);
     $('user-info').textContent = USER.login+' ('+USER.role+')';
     show($('user-info')); show($('btn-logout')); hide($('btn-login'));
@@ -36,6 +37,8 @@ async function checkSession(){
     else show($('admin-panel'));
   } else {
     USER = null;
+    TOKEN = '';
+    localStorage.removeItem('token');
     hide($('user-info')); hide($('btn-logout')); show($('btn-login'));
     hide($('admin-panel'));
   }
@@ -54,7 +57,14 @@ $('btn-register').onclick=async e=>{
   const login=$('auth-username').value.trim();
   const pass=$('auth-password').value.trim();
   const r = await apiAuth('register',{login,password:pass});
-  alert(r.message);
+  if(r.ok) {
+    TOKEN = r.token;
+    localStorage.setItem('token', TOKEN);
+    USER = r.user;
+    dlgAuth.close();
+    await checkSession();
+    await loadCountries();
+  } else alert(r.message);
 };
 
 $('btn-signin').onclick=async e=>{
@@ -68,19 +78,22 @@ $('btn-signin').onclick=async e=>{
     USER=r.user;
     dlgAuth.close();
     await checkSession();
-    await loadCountries(); // сначала получаем страны
+    await loadCountries();
   } else alert(r.message);
 };
 
 // --- Countries ---
 async function apiCountries(){
-  if(!TOKEN) return; // защита
+  if(!TOKEN) return;
   const res = await fetch(`${API}/countries`,{
     headers:{ 'Authorization':'Bearer '+TOKEN }
   });
   const data = await res.json();
   if(!Array.isArray(data)){
     console.error('Invalid countries', data);
+    if(data.message==='Invalid token'){
+      TOKEN=''; localStorage.removeItem('token'); checkSession();
+    }
     return;
   }
   COUNTRIES = data;
@@ -129,11 +142,7 @@ function updateMap(){
   if(!svg || !Array.isArray(COUNTRIES) || COUNTRIES.length===0) return;
   svg.querySelectorAll('path').forEach(p=>{
     const c = COUNTRIES.find(x=>x.name === p.id);
-    if(c){
-      p.style.fill = c.owner ? '#4cc9f0' : '#12151b';
-    } else {
-      p.style.fill = '#12151b';
-    }
+    p.style.fill = c && c.owner ? '#4cc9f0' : '#12151b';
   });
 }
 
@@ -151,7 +160,6 @@ async function doAction(action,el){
   };
 
   let body={op: opMap[action], countryId, unit, cost};
-
   if(action==='declare-war' || action==='attack'){
     body.defenderId = prompt('ID страны?');
   }
@@ -223,5 +231,7 @@ document.querySelectorAll('[data-action]').forEach(btn=>{
 });
 
 // --- Init ---
-checkSession();
-loadCountries();
+(async()=>{
+  await checkSession();
+  await loadCountries();
+})();
