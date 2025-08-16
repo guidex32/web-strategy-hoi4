@@ -25,6 +25,11 @@ process.on('unhandledRejection', (reason, promise) => {
 process.on('uncaughtException', err => {
   console.error('Uncaught Exception thrown:', err);
 });
+
+app.get('/test', (req,res)=>{
+  res.json({ok:true, msg:'Server is alive'});
+});
+
 // --- Middleware ---
 app.use(cors());
 app.use(bodyParser.json());
