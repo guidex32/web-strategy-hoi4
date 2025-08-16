@@ -52,17 +52,17 @@ app.post('/api/auth', async (req, res) => {
     if (!login || !password) return res.json({ ok: false, message: 'Введите логин и пароль' });
 
     if (op === 'register') {
-      const [rows] = await pool.query('SELECT * FROM user WHERE login=?', [login]);
+      const [rows] = await pool.query('SELECT * FROM users WHERE login=?', [login]);
       if (rows.length) return res.json({ ok: false, message: 'Логин занят' });
 
-      await pool.query('INSERT INTO user(login, password, role) VALUES(?,?,?)', [login, password, 'player']);
-      const [newUser] = await pool.query('SELECT * FROM user WHERE login=?', [login]);
+      await pool.query('INSERT INTO users(login, password, role) VALUES(?,?,?)', [login, password, 'player']);
+      const [newUser] = await pool.query('SELECT * FROM users WHERE login=?', [login]);
       const token = jwt.sign({ id: newUser[0].id, login: newUser[0].login, role: newUser[0].role }, SECRET);
-      return res.json({ ok: true, token, user: newUser[0] });
+      return res.json({ ok: true, token, users: newUser[0] });
     }
 
     if (op === 'login') {
-      const [rows] = await pool.query('SELECT * FROM user WHERE login=? AND password=?', [login, password]);
+      const [rows] = await pool.query('SELECT * FROM users WHERE login=? AND password=?', [login, password]);
       if (rows.length === 0) return res.json({ ok: false, message: 'Неверный логин или пароль' });
 
       const user = rows[0];
@@ -71,8 +71,8 @@ app.post('/api/auth', async (req, res) => {
     }
 
     if (op === 'session') {
-      if (!req.user) return res.json({ ok: false });
-      return res.json({ ok: true, user: req.user });
+      if (!req.users) return res.json({ ok: false });
+      return res.json({ ok: true, user: req.users });
     }
 
     res.json({ ok: false, message: 'Неизвестная операция' });
@@ -159,7 +159,7 @@ app.post('/api', verifyToken, async (req, res) => {
     if (op === 'assign_owner' && req.user.role === 'owner') {
       const [crows] = await pool.query('SELECT * FROM countries WHERE id=?', [countryId]);
       if (crows.length === 0) return res.json({ ok: false, message: 'Страна не найдена' });
-      const [urows] = await pool.query('SELECT * FROM user WHERE login=?', [login]);
+      const [urows] = await pool.query('SELECT * FROM users WHERE login=?', [login]);
       if (urows.length === 0) return res.json({ ok: false, message: 'Пользователь не найден' });
       await pool.query('UPDATE countries SET owner=? WHERE id=?', [login, countryId]);
       return res.json({ ok: true });
