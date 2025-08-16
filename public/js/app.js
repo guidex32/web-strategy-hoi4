@@ -5,46 +5,39 @@ let COUNTRIES = [];
 
 const $ = id => document.getElementById(id);
 const dlgAuth = $('dlg-auth');
-const dlgPrompt = $('dlg-prompt');
-const dlgLogs = $('dlg-logs');
 
 function show(el){ el.classList.remove('hidden'); }
 function hide(el){ el.classList.add('hidden'); }
 
-// --- Auth ---
+// --- API --- 
 async function apiAuth(op, data){
-  const res = await fetch(`${API}/auth`,{
-    method:'POST',
-    headers:{
-      'Content-Type':'application/json',
-      'Authorization': TOKEN ? 'Bearer '+TOKEN : ''
-    },
-    body: JSON.stringify({op, ...data})
-  });
-  return res.json();
+  try {
+    const res = await fetch(`${API}/auth`, {
+      method:'POST',
+      headers:{'Content-Type':'application/json', 'Authorization': TOKEN ? 'Bearer '+TOKEN : ''},
+      body: JSON.stringify({op, ...data})
+    });
+    return await res.json();
+  } catch(err){ console.error('Auth error', err); return {ok:false, message:'Сервер не отвечает'}; }
 }
 
+// --- check session ---
 async function checkSession(){
-  if(!TOKEN) {
+  if(!TOKEN){
     USER = null;
     hide($('user-info')); hide($('btn-logout')); show($('btn-login'));
     hide($('admin-panel'));
     return false;
   }
-
   const r = await apiAuth('session',{});
   if(r.user){
     USER = r.user;
-    TOKEN = r.token || TOKEN; // обновляем токен от сервера
-    localStorage.setItem('token', TOKEN);
-    $('user-info').textContent = USER.login+' ('+USER.role+')';
+    $('user-info').textContent = `${USER.login} (${USER.role})`;
     show($('user-info')); show($('btn-logout')); hide($('btn-login'));
-    if(USER.role==='admin') show($('admin-panel'));
-    else hide($('admin-panel'));
+    if(USER.role==='admin') show($('admin-panel')); else hide($('admin-panel'));
     return true;
   } else {
-    USER = null;
-    TOKEN = '';
+    TOKEN=''; USER=null;
     localStorage.removeItem('token');
     hide($('user-info')); hide($('btn-logout')); show($('btn-login'));
     hide($('admin-panel'));
@@ -61,30 +54,36 @@ $('btn-logout').onclick = async ()=>{
   await checkSession();
 };
 
-$('btn-register').onclick=async e=>{
+$('btn-register').onclick = async e=>{
   e.preventDefault();
-  const login=$('auth-username').value.trim();
-  const pass=$('auth-password').value.trim();
+  const login = $('auth-username').value.trim();
+  const pass = $('auth-password').value.trim();
+  if(!login || !pass) return alert('Введите логин и пароль');
   const r = await apiAuth('register',{login,password:pass});
   if(r.ok){
-    TOKEN=r.token;
-    localStorage.setItem('token', TOKEN);
-    USER=r.user;
-    dlgAuth.close();
-    await checkSession();
-    await loadCountries();
+    // после регистрации делаем **авто-вход**
+    const loginRes = await apiAuth('login',{login,password:pass});
+    if(loginRes.ok){
+      TOKEN = loginRes.token;
+      localStorage.setItem('token', TOKEN);
+      USER = loginRes.user;
+      dlgAuth.close();
+      await checkSession();
+      await loadCountries();
+    } else alert('Не удалось автоматически войти: '+loginRes.message);
   } else alert(r.message);
 };
 
-$('btn-signin').onclick=async e=>{
+$('btn-signin').onclick = async e=>{
   e.preventDefault();
-  const login=$('auth-username').value.trim();
-  const pass=$('auth-password').value.trim();
+  const login = $('auth-username').value.trim();
+  const pass = $('auth-password').value.trim();
+  if(!login || !pass) return alert('Введите логин и пароль');
   const r = await apiAuth('login',{login,password:pass});
   if(r.ok){
-    TOKEN=r.token;
+    TOKEN = r.token;
     localStorage.setItem('token', TOKEN);
-    USER=r.user;
+    USER = r.user;
     dlgAuth.close();
     await checkSession();
     await loadCountries();
@@ -94,27 +93,19 @@ $('btn-signin').onclick=async e=>{
 // --- Countries ---
 async function apiCountries(){
   if(!TOKEN) return;
-  const res = await fetch(`${API}/countries`,{
-    headers:{ 'Authorization':'Bearer '+TOKEN }
-  });
-  const data = await res.json();
-  if(!Array.isArray(data)){
-    console.error('Invalid countries', data);
-    if(data.message==='Invalid token'){
-      TOKEN=''; localStorage.removeItem('token'); await checkSession();
+  try {
+    const res = await fetch(`${API}/countries`, { headers:{ 'Authorization':'Bearer '+TOKEN } });
+    const data = await res.json();
+    if(!Array.isArray(data)) {
+      console.error('Invalid countries', data);
+      if(data.message==='Invalid token'){ TOKEN=''; localStorage.removeItem('token'); await checkSession(); }
+      return;
     }
-    return;
-  }
-  COUNTRIES = data;
-  updateInfo(null);
-  updateMap();
-  updatePoints();
+    COUNTRIES = data;
+    updateInfo(null);
+    updateMap();
+    updatePoints();
+  } catch(err){ console.error(err); }
 }
 
-async function loadCountries(){ await apiCountries(); }
-
-// --- Init ---
-(async()=>{
-  const ok = await checkSession();
-  if(ok) await loadCountries();
-})();
+async function loadCountries(){ await ap
