@@ -1,128 +1,130 @@
 const express = require('express');
+const cors = require('cors');
 const mysql = require('mysql2/promise');
 const bodyParser = require('body-parser');
-const cors = require('cors');
-const bcrypt = require('bcrypt');
-const jwt = require('jsonwebtoken');
 const path = require('path');
+const jwt = require('jsonwebtoken');
 
 const app = express();
-app.use(cors());
-app.use(bodyParser.json());
-app.use(express.static(path.join(__dirname, 'public')));
+const PORT = process.env.PORT || 3000;
 
-const JWT_SECRET = 'secret_123'; // поменяй на свой ключ
-
-// --- MySQL подключение ---
+// --- MySQL ---
 const dbConfig = {
   host: '51.38.13.75',
   user: 'gs10071',
   password: 'fCEJNemIUB',
-  database: 'gs10071',  // убедись, что БД создана
-  port: 3306
+  database: 'gs10071',
+  port: 3306,
 };
 
-// --- Middleware auth ---
-async function authMiddleware(req, res, next){
-  const header = req.headers.authorization;
-  if(!header) return res.json({ok:false, message:'Нет токена'});
+let pool;
+(async () => {
+  pool = await mysql.createPool(dbConfig);
+})();
+
+// --- Middleware ---
+app.use(cors());
+app.use(bodyParser.json());
+app.use(express.static(path.join(__dirname, 'public')));
+
+const SECRET = 'supersecretkey123';
+
+// --- Helper: verify token ---
+async function verifyToken(req, res, next) {
+  const header = req.headers['authorization'];
+  if(!header) return res.status(401).json({ok:false, message:'No token'});
   const token = header.split(' ')[1];
   try {
-    const data = jwt.verify(token, JWT_SECRET);
-    req.user = data;
+    const decoded = jwt.verify(token, SECRET);
+    req.user = decoded;
     next();
-  } catch(e){
-    res.json({ok:false, message:'Неверный токен'});
+  } catch(e) {
+    res.status(401).json({ok:false, message:'Invalid token'});
   }
 }
 
 // --- Auth routes ---
 app.post('/api/auth', async (req,res)=>{
   const {op, login, password} = req.body;
-  const conn = await mysql.createConnection(dbConfig);
-
-  if(op === 'register'){
-    const [exists] = await conn.execute('SELECT * FROM users WHERE login=?',[login]);
-    if(exists.length) return res.json({ok:false, message:'Пользователь уже есть'});
-    const hash = await bcrypt.hash(password, 10);
-    await conn.execute('INSERT INTO users(login,password,role) VALUES(?,?,?)',[login,hash,'player']);
-    return res.json({ok:true, message:'Зарегистрирован'});
-  }
-
-  if(op === 'login'){
-    const [rows] = await conn.execute('SELECT * FROM users WHERE login=?',[login]);
-    if(!rows.length) return res.json({ok:false, message:'Нет такого пользователя'});
-    const user = rows[0];
-    const match = await bcrypt.compare(password,user.password);
-    if(!match) return res.json({ok:false, message:'Неверный пароль'});
-    const token = jwt.sign({id:user.id, login:user.login, role:user.role}, JWT_SECRET);
-    return res.json({ok:true, token, user:{id:user.id,login:user.login,role:user.role}});
-  }
-
-  if(op === 'session'){
-    const token = req.headers.authorization?.split(' ')[1];
-    if(!token) return res.json({user:null});
+  if(op==='register'){
     try{
-      const data = jwt.verify(token, JWT_SECRET);
-      res.json({user:data});
-    }catch(e){
-      res.json({user:null});
-    }
+      const [rows] = await pool.query('SELECT * FROM users WHERE login=?',[login]);
+      if(rows.length) return res.json({ok:false, message:'Логин занят'});
+      await pool.query('INSERT INTO users(login,password,role) VALUES(?,?,?)',[login,password,'user']);
+      return res.json({ok:true, message:'Регистрация прошла успешно'});
+    }catch(e){return res.json({ok:false, message:e.message});}
+  }
+  if(op==='login'){
+    try{
+      const [rows] = await pool.query('SELECT * FROM users WHERE login=? AND password=?',[login,password]);
+      if(rows.length===0) return res.json({ok:false, message:'Неверный логин или пароль'});
+      const user = rows[0];
+      const token = jwt.sign({id:user.id, login:user.login, role:user.role}, SECRET);
+      return res.json({ok:true, token, user});
+    }catch(e){return res.json({ok:false, message:e.message});}
+  }
+  if(op==='session'){
+    try{
+      const user = req.user;
+      return res.json({ok:true, user});
+    }catch(e){return res.json({ok:false});}
   }
 });
 
 // --- Countries ---
-app.get('/api/countries', authMiddleware, async (req,res)=>{
-  const conn = await mysql.createConnection(dbConfig);
-  const [countries] = await conn.execute('SELECT * FROM countries');
-  res.json(countries);
+app.get('/api/countries', verifyToken, async (req,res)=>{
+  try{
+    const [rows] = await pool.query('SELECT * FROM countries');
+    res.json(rows);
+  }catch(e){res.json({ok:false,message:e.message});}
 });
 
 // --- Actions ---
-app.post('/api', authMiddleware, async (req,res)=>{
+app.post('/api', verifyToken, async (req,res)=>{
   const {op, countryId, unit, cost, attackerId, defenderId, name} = req.body;
-  const conn = await mysql.createConnection(dbConfig);
-
-  if(op==='buy_unit'){
-    const [rows] = await conn.execute('SELECT army FROM countries WHERE id=?',[countryId]);
-    let army = JSON.parse(rows[0].army||'{}');
-    army[unit] = (army[unit]||0) + 1;
-    await conn.execute('UPDATE countries SET army=? WHERE id=?',[JSON.stringify(army), countryId]);
-    res.json({ok:true});
-  }
-
-  if(op==='declare_war'){
-    await conn.execute('UPDATE countries SET status="war" WHERE id=? OR id=?',[attackerId,defenderId]);
-    res.json({ok:true});
-  }
-
-  if(op==='attack'){
-    // просто пример логики
-    const [rows] = await conn.execute('SELECT army FROM countries WHERE id=?',[defenderId]);
-    let army = JSON.parse(rows[0].army||'{}');
-    const lost = Object.keys(army).length ? 1 : 0;
-    await conn.execute('UPDATE countries SET army=? WHERE id=?',[JSON.stringify({}), defenderId]);
-    res.json({ok:true,lost});
-  }
-
-  if(op==='create_country'){
-    await conn.execute('INSERT INTO countries(name,owner,economy,army,status,points) VALUES(?,?,?,?,?,?)',[name,null,0,'{}','peace',0]);
-    res.json({ok:true});
-  }
+  try{
+    if(op==='buy_unit'){
+      const [rows] = await pool.query('SELECT * FROM countries WHERE id=?',[countryId]);
+      if(rows.length===0) return res.json({ok:false,message:'Страна не найдена'});
+      let army = JSON.parse(rows[0].army||'{}');
+      army[unit] = (army[unit]||0)+1;
+      await pool.query('UPDATE countries SET army=? WHERE id=?',[JSON.stringify(army),countryId]);
+      return res.json({ok:true});
+    }
+    if(op==='declare_war'){
+      await pool.query('UPDATE countries SET status=? WHERE id=?',['war',defenderId]);
+      return res.json({ok:true});
+    }
+    if(op==='attack'){
+      const [rows] = await pool.query('SELECT * FROM countries WHERE id=?',[defenderId]);
+      if(rows.length===0) return res.json({ok:false,message:'Страна не найдена'});
+      // простая логика атаки: уменьшаем очки на 10
+      let points = rows[0].points || 0;
+      points = Math.max(points-10,0);
+      await pool.query('UPDATE countries SET points=? WHERE id=?',[points,defenderId]);
+      return res.json({ok:true,lost:10});
+    }
+    if(op==='create_country' && req.user.role==='admin'){
+      await pool.query('INSERT INTO countries(name,economy,army,status,points) VALUES(?,?,?,?,?)',[name,0,'{}','peace',0]);
+      return res.json({ok:true});
+    }
+    res.json({ok:false,message:'Неизвестная операция'});
+  }catch(e){res.json({ok:false,message:e.message});}
 });
 
 // --- Logs ---
-app.get('/logs', authMiddleware, async (req,res)=>{
-  const conn = await mysql.createConnection(dbConfig);
-  const [logs] = await conn.execute('SELECT * FROM logs ORDER BY timestamp DESC LIMIT 100');
-  res.json(logs);
+app.get('/logs', verifyToken, async (req,res)=>{
+  if(req.user.role!=='admin') return res.json([]);
+  try{
+    const [rows] = await pool.query('SELECT * FROM logs ORDER BY timestamp DESC');
+    res.json(rows);
+  }catch(e){res.json([]);}
 });
 
-// --- Index ---
-app.get('/', (req,res)=>{
+// --- Front ---
+app.get('*',(req,res)=>{
   res.sendFile(path.join(__dirname,'public','index.html'));
 });
 
-// --- Server ---
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, ()=>console.log('Server running on port',PORT));
+// --- Start ---
+app.listen(PORT, ()=>console.log('Server running on port '+PORT));
