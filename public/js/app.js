@@ -25,31 +25,40 @@ async function apiAuth(op, data){
 }
 
 async function checkSession(){
-  if(!TOKEN) return;
+  if(!TOKEN) {
+    USER = null;
+    hide($('user-info')); hide($('btn-logout')); show($('btn-login'));
+    hide($('admin-panel'));
+    return false;
+  }
+
   const r = await apiAuth('session',{});
   if(r.user){
     USER = r.user;
-    TOKEN = r.token || TOKEN; // обновляем токен с сервера
+    TOKEN = r.token || TOKEN; // обновляем токен от сервера
     localStorage.setItem('token', TOKEN);
     $('user-info').textContent = USER.login+' ('+USER.role+')';
     show($('user-info')); show($('btn-logout')); hide($('btn-login'));
-    if(USER.role!=='admin') hide($('admin-panel'));
-    else show($('admin-panel'));
+    if(USER.role==='admin') show($('admin-panel'));
+    else hide($('admin-panel'));
+    return true;
   } else {
     USER = null;
     TOKEN = '';
     localStorage.removeItem('token');
     hide($('user-info')); hide($('btn-logout')); show($('btn-login'));
     hide($('admin-panel'));
+    return false;
   }
 }
 
 // --- Login/Register ---
 $('btn-login').onclick = ()=>dlgAuth.showModal();
-$('btn-logout').onclick = ()=>{
+
+$('btn-logout').onclick = async ()=>{
   TOKEN=''; USER=null;
   localStorage.removeItem('token');
-  checkSession();
+  await checkSession();
 };
 
 $('btn-register').onclick=async e=>{
@@ -57,10 +66,10 @@ $('btn-register').onclick=async e=>{
   const login=$('auth-username').value.trim();
   const pass=$('auth-password').value.trim();
   const r = await apiAuth('register',{login,password:pass});
-  if(r.ok) {
-    TOKEN = r.token;
+  if(r.ok){
+    TOKEN=r.token;
     localStorage.setItem('token', TOKEN);
-    USER = r.user;
+    USER=r.user;
     dlgAuth.close();
     await checkSession();
     await loadCountries();
@@ -92,7 +101,7 @@ async function apiCountries(){
   if(!Array.isArray(data)){
     console.error('Invalid countries', data);
     if(data.message==='Invalid token'){
-      TOKEN=''; localStorage.removeItem('token'); checkSession();
+      TOKEN=''; localStorage.removeItem('token'); await checkSession();
     }
     return;
   }
@@ -104,134 +113,8 @@ async function apiCountries(){
 
 async function loadCountries(){ await apiCountries(); }
 
-// --- Map & Info ---
-function updateInfo(countryId){
-  const infoCountry=$('info-country');
-  const infoOwner=$('info-owner');
-  const infoEcon=$('info-econ');
-  const infoArmy=$('info-army');
-  const infoStatus=$('info-status');
-
-  if(!countryId){ 
-    infoCountry.textContent='—'; 
-    infoOwner.textContent='—'; 
-    infoEcon.textContent='0'; 
-    infoArmy.textContent='нет'; 
-    infoStatus.textContent='мир'; 
-    return;
-  }
-
-  const c = Array.isArray(COUNTRIES) ? COUNTRIES.find(x=>x.id==countryId) : null;
-  if(!c) return;
-  infoCountry.textContent=c.name;
-  infoOwner.textContent=c.owner||'—';
-  infoEcon.textContent=c.economy||0;
-  const army = JSON.parse(c.army||'{}');
-  infoArmy.textContent = Object.entries(army).map(([k,v])=>`${k}:${v}`).join(', ')||'нет';
-  infoStatus.textContent=c.status;
-}
-
-function updatePoints(){
-  const total = Array.isArray(COUNTRIES) ? COUNTRIES.reduce((a,c)=>a+(c.points||0),0) : 0;
-  $('points').textContent = 'Очки: '+total;
-}
-
-// --- Map ---
-function updateMap(){
-  const svg = $('map').contentDocument;
-  if(!svg || !Array.isArray(COUNTRIES) || COUNTRIES.length===0) return;
-  svg.querySelectorAll('path').forEach(p=>{
-    const c = COUNTRIES.find(x=>x.name === p.id);
-    p.style.fill = c && c.owner ? '#4cc9f0' : '#12151b';
-  });
-}
-
-// --- Actions ---
-async function doAction(action,el){
-  if(!USER) { alert('Нужна авторизация'); return; }
-  const cost = parseInt(el.dataset.cost||0);
-  const unit = el.dataset.unit;
-  const countryId = COUNTRIES[0]?.id || 1;
-
-  const opMap = {
-    'buy-unit':'buy_unit',
-    'declare-war':'declare_war',
-    'attack':'attack'
-  };
-
-  let body={op: opMap[action], countryId, unit, cost};
-  if(action==='declare-war' || action==='attack'){
-    body.defenderId = prompt('ID страны?');
-  }
-
-  const res = await fetch(`${API}/action`,{
-    method:'POST',
-    headers:{'Content-Type':'application/json','Authorization':'Bearer '+TOKEN},
-    body: JSON.stringify(body)
-  });
-
-  const r = await res.json();
-  if(r.ok){
-    alert(action==='attack' ? 'Атака прошла!' : 'Успешно!');
-  } else {
-    alert(r.message);
-    if(r.message==='Invalid token'){
-      TOKEN=''; localStorage.removeItem('token'); checkSession();
-    }
-  }
-  await loadCountries();
-}
-
-// --- Admin ---
-$('admin-panel').onclick=e=>{
-  const btn=e.target.closest('button');
-  if(!btn) return;
-  const op=btn.dataset.admin;
-  if(op==='create-country'){
-    const name=prompt('Название страны?');
-    if(!name) return;
-    fetch(`${API}/action`,{
-      method:'POST',
-      headers:{'Content-Type':'application/json','Authorization':'Bearer '+TOKEN},
-      body: JSON.stringify({op:'create_country', name})
-    }).then(r=>r.json()).then(r=>{ alert('Создано!'); loadCountries(); });
-  }
-  if(op==='view-logs'){
-    fetch(`${API}/logs`,{headers:{'Authorization':'Bearer '+TOKEN}}).then(r=>r.json()).then(data=>{
-      $('logs-view').textContent=data.map(l=>`${l.timestamp}: ${l.text}`).join('\n');
-      dlgLogs.showModal();
-    });
-  }
-};
-
-// --- Map hover ---
-$('map').addEventListener('load',()=>{
-  const svg = $('map').contentDocument;
-  if(!svg || !Array.isArray(COUNTRIES)) return;
-  svg.querySelectorAll('path').forEach(p=>{
-    p.addEventListener('mouseenter',e=>{
-      const id = p.id;
-      const c = COUNTRIES.find(x=>x.name===id);
-      if(c){
-        const tip=$('tooltip');
-        tip.textContent=c.name;
-        tip.style.left=e.pageX+'px';
-        tip.style.top=e.pageY+'px';
-        show(tip);
-        updateInfo(c.id);
-      }
-    });
-    p.addEventListener('mouseleave',()=>{ hide($('tooltip')); updateInfo(null); });
-  });
-});
-
-// --- Global action buttons ---
-document.querySelectorAll('[data-action]').forEach(btn=>{
-  btn.onclick=()=>doAction(btn.dataset.action,btn);
-});
-
 // --- Init ---
 (async()=>{
-  await checkSession();
-  await loadCountries();
+  const ok = await checkSession();
+  if(ok) await loadCountries();
 })();
