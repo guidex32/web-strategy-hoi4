@@ -1,4 +1,4 @@
-const API = 'http://51.38.13.75:3000'; // твой хост Render
+const API = 'https://web-strategy-hoi4.onrender.com'; // твой Node сервер на Render
 let TOKEN = localStorage.getItem('token')||'';
 let USER = null;
 let COUNTRIES = [];
