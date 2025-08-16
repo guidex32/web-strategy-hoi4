@@ -1,0 +1,28 @@
+{
+  "1": {
+    "name": "Страна 1",
+    "owner": null,
+    "economy": 1,
+    "points": 5,
+    "status": "мир",
+    "atwarWith": {},
+    "army": {
+      "tank": 1,
+      "pvo": 0,
+      "btr": 0
+    }
+  },
+  "2": {
+    "name": "Страна 2",
+    "owner": null,
+    "economy": 0,
+    "points": 3,
+    "status": "мир",
+    "atwarWith": {},
+    "army": {
+      "tank": 0,
+      "pvo": 1,
+      "btr": 1
+    }
+  }
+}
