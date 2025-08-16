@@ -1,51 +1,68 @@
-*{box-sizing:border-box}html,body{margin:0;padding:0;height:100%;font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif}
-:root{--bg:#0f1115;--panel:#171a21;--text:#f6f7f9;--muted:#a9b0bd;--accent:#8ecae6;--primary:#4cc9f0;--warn:#ffb703;--error:#ef476f;border-color:#2a2f3a}
-body{background:var(--bg);color:var(--text)}
-.topbar{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;border-bottom:1px solid var(--border-color);background:#12151b;position:sticky;top:0;z-index:10}
-.brand{font-weight:700;letter-spacing:.5px}
-.nav{display:flex;gap:8px;align-items:center}
-.badge{padding:4px 8px;background:#1c212b;border:1px solid #2a2f3a;border-radius:10px;color:var(--muted);font-size:12px}
-.btn{padding:8px 10px;border-radius:10px;border:1px solid #2a2f3a;background:#1c212b;color:var(--text);cursor:pointer}
-.btn:hover{filter:brightness(1.2)}
-.btn-primary{background:var(--primary);border-color:#2b90b9;color:#001018}
-.btn-ghost{background:transparent}
-.btn-warn{background:var(--warn);color:#241a00}
-.hidden{display:none!important}
-.layout{display:grid;grid-template-columns:260px 1fr 260px;gap:12px;padding:12px}
-.panel{background:var(--panel);border:1px solid #2a2f3a;border-radius:14px;padding:12px;min-height:200px}
-.stack{display:flex;flex-direction:column;gap:8px}
-.row{display:flex;gap:8px;align-items:center}
-.map-wrap {
-  position: relative;
-  width: 100%;
-  height: 100%;
-  flex: 1; /* чтобы заняло оставшееся место между панелями */
+*{box-sizing:border-box;margin:0;padding:0;font-family:sans-serif;}
+body,html{height:100%;width:100%;display:flex;flex-direction:column;}
+
+.topbar{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  padding:0.5em 1em;
+  background:#222;color:#fff;
 }
-#map {
-  width: 800px;
-  height: 600px;
-  display: block;
-  margin: 0 auto; /* центрирование */
+.nav .btn,.nav .badge{margin-left:0.5em;}
+
+.layout{
+  flex:1;
+  display:flex;
+  height:calc(100% - 50px); /* учитываем topbar */
 }
-.map-wrap object {
-  width: 100%;
-  height: 100%;
-  display: block;
+
+.panel{
+  width:250px;
+  background:#f0f0f0;
+  padding:0.5em;
+  display:flex;
+  flex-direction:column;
+  overflow:auto;
 }
-html, body {
-  margin: 0;
-  padding: 0;
-  height: 100%;
+.panel h3{margin-bottom:0.5em;}
+.actions .btn{margin-bottom:0.3em;width:100%;}
+.admin .btn{margin-bottom:0.3em;width:100%;}
+.stack{display:flex;flex-direction:column;}
+
+.map-wrap{
+  flex:1;
+  position:relative;
+  display:flex;
+  justify-content:center;
+  align-items:center;
+  background:#ddd;
+  overflow:hidden;
 }
-.layout {
-  display: flex;
-  flex-direction: row;
-  height: 100%;
+.map-object{
+  width:100%;
+  height:100%;
 }
-.tooltip{position:absolute;background:#0b0e13;border:1px solid #2a2f3a;border-radius:10px;padding:6px 8px;font-size:12px;color:var(--muted);pointer-events:none;transform:translate(-50%,-120%)}
-.info{font-size:14px;color:var(--muted);display:grid;gap:6px}
-.actions{display:grid;gap:8px}
-.admin{margin-top:8px;padding-top:8px;border-top:1px dashed #2a2f3a}
-dialog{border:none;border-radius:14px;padding:0;max-width:480px;width:92vw;background:#141821;color:var(--text)}
-dialog form{padding:16px}
-pre.logs{max-height:60vh;overflow:auto;background:#0b0e13;border:1px solid #2a2f3a;border-radius:10px;padding:10px;color:#9fb2c8}
+
+.tooltip{
+  position:absolute;
+  background:rgba(0,0,0,0.7);
+  color:#fff;
+  padding:0.3em 0.5em;
+  border-radius:3px;
+  pointer-events:none;
+  top:10px;
+  left:10px;
+}
+
+.info div{margin-bottom:0.3em;}
+.info{background:#eee;padding:0.5em;border-radius:5px;overflow:hidden;}
+.hidden{display:none;}
+.btn{cursor:pointer;padding:0.3em 0.5em;border:none;border-radius:3px;background:#444;color:#fff;}
+.btn:hover{background:#666;}
+.btn-ghost{background:transparent;color:#444;border:1px solid #444;}
+.btn-ghost:hover{background:#444;color:#fff;}
+.btn-primary{background:#007bff;color:#fff;}
+.btn-primary:hover{background:#0056b3;}
+.btn-warn{background:#ff6600;color:#fff;}
+.btn-warn:hover{background:#cc5200;}
+.badge{padding:0.2em 0.5em;background:#aaa;border-radius:3px;color:#fff;font-size:0.9em;}
