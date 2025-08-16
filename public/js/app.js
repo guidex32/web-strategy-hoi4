@@ -1,207 +1,195 @@
-// Client for HOI-Lite Node version
-const API = {
-  async post(path, data) {
-    const token = localStorage.getItem('token');
-    const res = await fetch(path, {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json', ...(token? {'Authorization': 'Bearer ' + token} : {})},
-      body: JSON.stringify(data||{})
-    });
-    const text = await res.text();
-    let j; try { j = JSON.parse(text); } catch { throw new Error(text); }
-    if(!res.ok) throw new Error(j.error || j.message || 'error');
-    return j;
-  },
-  async get(path) {
-    const token = localStorage.getItem('token');
-    const res = await fetch(path, { headers: token? {'Authorization': 'Bearer ' + token} : {} });
-    const j = await res.json(); if(!res.ok) throw new Error(j.error||'error'); return j;
+const API = 'http://localhost:3000'; // или твой реальный хост
+let TOKEN = localStorage.getItem('token')||'';
+let USER = null;
+let COUNTRIES = [];
+
+const $ = id=>document.getElementById(id);
+const dlgAuth=$('dlg-auth');
+const dlgPrompt=$('dlg-prompt');
+const dlgLogs=$('dlg-logs');
+
+function show(el){el.classList.remove('hidden');}
+function hide(el){el.classList.add('hidden');}
+
+// --- Auth ---
+async function apiAuth(op,data){
+  const res = await fetch(`${API}/auth`,{
+    method:'POST',
+    headers:{'Content-Type':'application/json', 'Authorization': TOKEN?'Bearer '+TOKEN:'',},
+    body: JSON.stringify({op,...data})
+  });
+  return res.json();
+}
+
+async function checkSession(){
+  const r = await apiAuth('session',{});
+  if(r.user){
+    USER = r.user;
+    TOKEN = TOKEN || '';
+    localStorage.setItem('token',TOKEN);
+    $('user-info').textContent = USER.login+' ('+USER.role+')';
+    show($('user-info')); show($('btn-logout')); hide($('btn-login'));
+    if(USER.role!=='admin') hide($('admin-panel'));
+    else show($('admin-panel'));
+  }else{
+    USER = null;
+    hide($('user-info')); hide($('btn-logout')); show($('btn-login'));
+    hide($('admin-panel'));
   }
 }
 
-const state = {
-  user: null,
-  selectedCountryId: null,
-  countries: {}
+// --- Login/Register ---
+$('btn-login').onclick = ()=>dlgAuth.showModal();
+$('btn-logout').onclick = ()=>{
+  TOKEN=''; USER=null;
+  localStorage.removeItem('token');
+  checkSession();
 };
 
-function $(sel, root=document){ return root.querySelector(sel) }
-function $all(sel, root=document){ return Array.from(root.querySelectorAll(sel)) }
-
-function setHidden(el, hidden){ hidden ? el.classList.add('hidden') : el.classList.remove('hidden') }
-
-async function init(){
-  wireUI();
-  await refreshSession();
-  await loadCountries();
-  bindMap();
-  tickUI();
-}
-
-function wireUI(){
-  $('#btn-login').addEventListener('click', ()=> $('#dlg-auth').showModal());
-  $('#btn-logout').addEventListener('click', logout);
-  $('#btn-register').addEventListener('click', onRegister);
-  $('#btn-signin').addEventListener('click', onLogin);
-
-  $('[data-action="admin-open"]').addEventListener('click', ()=>{
-    if(!state.user || state.user.role!=='admin'){ alert('Только админ'); return; }
-    $('#admin-panel').classList.toggle('hidden');
-  });
-
-  // Admin actions
-  $('[data-admin="create-country"]').addEventListener('click', ()=> promptDialog('Название страны', async (name)=>{
-    if(!name) return;
-    await API.post('/api', {op:'admin_create_country', name});
-    await loadCountries();
-  }));
-  $('[data-admin="assign-owner"]').addEventListener('click', ()=> promptDialog('Логин владельца (и выбери страну на карте)', async (login)=>{
-    const id = state.selectedCountryId;
-    if(!login || !id) return alert('Нужны логин и выбранная страна');
-    await API.post('/api', {op:'admin_assign_owner', countryId:id, login});
-    await loadCountries();
-  }));
-  $('[data-admin="give-points"]').addEventListener('click', ()=> promptDialog('Сколько очков выдать выбранной стране?', async (n)=>{
-    const id = state.selectedCountryId;
-    await API.post('/api', {op:'admin_give_points', countryId:id, amount:parseInt(n||'0')});
-    await loadCountries();
-  }));
-  $('[data-admin="toggle-economy"]').addEventListener('click', async ()=>{
-    await API.post('/api', {op:'admin_toggle_economy'});
-    alert('Переключено');
-  });
-  $('[data-admin="view-logs"]').addEventListener('click', async ()=>{
-    const r = await API.post('/api', {op:'admin_logs'});
-    $('#logs-view').textContent = r.logs.join('\n');
-    $('#dlg-logs').showModal();
-  });
-
-  // Gameplay actions (Г)
-  $all('[data-action="buy-unit"]').forEach(btn => btn.addEventListener('click', async ()=>{
-    if(!state.selectedCountryId) return alert('Выбери страну');
-    await API.post('/api', {op:'buy_unit', countryId: state.selectedCountryId, unit: btn.dataset.unit, cost: parseInt(btn.dataset.cost)});
-    await loadCountries();
-  }));
-  $('[data-action="economy-spend"]').addEventListener('click', async (e)=>{
-    if(!state.selectedCountryId) return alert('Выбери страну');
-    await API.post('/api', {op:'build_economy', countryId: state.selectedCountryId, cost: parseInt(e.target.dataset.cost)});
-    await loadCountries();
-  });
-  $('[data-action="declare-war"]').addEventListener('click', async ()=>{
-    if(!state.selectedCountryId) return alert('Выбери свою страну');
-    const target = prompt('С кем война? Введи ID страны');
-    if(!target) return;
-    await API.post('/api', {op:'declare_war', attackerId: state.selectedCountryId, defenderId: target});
-    await loadCountries();
-  });
-  $('[data-action="attack"]').addEventListener('click', async ()=>{
-    if(!state.selectedCountryId) return alert('Выбери свою страну');
-    const target = prompt('Кого атаковать? Введи ID страны');
-    if(!target) return;
-    await API.post('/api', {op:'attack', attackerId: state.selectedCountryId, defenderId: target});
-    await loadCountries();
-  });
-}
-
-async function refreshSession(){
-  try{
-    const r = await API.post('/auth', {op:'session'});
-    state.user = r.user;
-    updateAuthUI();
-  }catch(e){ console.warn(e) }
-}
-
-async function onRegister(e){
+$('btn-register').onclick=async e=>{
   e.preventDefault();
-  const login = $('#auth-username').value.trim();
-  const password = $('#auth-password').value.trim();
-  if(!login || !password) return;
-  const r = await API.post('/auth', {op:'register', login, password});
+  const login=$('auth-username').value.trim();
+  const pass=$('auth-password').value.trim();
+  const r = await apiAuth('register',{login,password:pass});
   alert(r.message);
-  $('#dlg-auth').close();
-  await refreshSession();
-}
-
-async function onLogin(e){
+};
+$('btn-signin').onclick=async e=>{
   e.preventDefault();
-  const login = $('#auth-username').value.trim();
-  const password = $('#auth-password').value.trim();
-  const r = await API.post('/auth', {op:'login', login, password});
+  const login=$('auth-username').value.trim();
+  const pass=$('auth-password').value.trim();
+  const r = await apiAuth('login',{login,password:pass});
   if(r.ok){
-    localStorage.setItem('token', r.token);
-    $('#dlg-auth').close();
-    await refreshSession();
-  } else alert(r.message||'Ошибка');
+    TOKEN=r.token;
+    localStorage.setItem('token',TOKEN);
+    USER=r.user;
+    dlgAuth.close();
+    checkSession();
+    loadCountries();
+  }else alert(r.message);
+};
+
+// --- Countries ---
+async function apiCountries(){
+  const res = await fetch(`${API}/countries`);
+  const data = await res.json();
+  COUNTRIES = data;
+  updateInfo(null);
+  updateMap();
+  updatePoints();
 }
 
-async function logout(){
-  localStorage.removeItem('token');
-  state.user = null;
-  updateAuthUI();
+async function loadCountries(){ await apiCountries(); }
+
+// --- Map & Info ---
+function updateInfo(countryId){
+  const infoCountry=$('info-country');
+  const infoOwner=$('info-owner');
+  const infoEcon=$('info-econ');
+  const infoArmy=$('info-army');
+  const infoStatus=$('info-status');
+
+  if(!countryId){ infoCountry.textContent='—'; infoOwner.textContent='—'; infoEcon.textContent='0'; infoArmy.textContent='нет'; infoStatus.textContent='мир'; return;}
+
+  const c = COUNTRIES.find(x=>x.id==countryId);
+  if(!c) return;
+  infoCountry.textContent=c.name;
+  infoOwner.textContent=c.owner||'—';
+  infoEcon.textContent=c.economy||0;
+  const army = JSON.parse(c.army||'{}');
+  infoArmy.textContent = Object.entries(army).map(([k,v])=>`${k}:${v}`).join(', ')||'нет';
+  infoStatus.textContent=c.status;
 }
 
-function updateAuthUI(){
-  const isAuth = !!state.user;
-  setHidden($('#btn-login'), isAuth);
-  setHidden($('#btn-logout'), !isAuth);
-  setHidden($('#user-info'), !isAuth);
-  if(isAuth){
-    $('#user-info').textContent = `${state.user.login} · ${state.user.role}`;
+function updatePoints(){
+  const total = COUNTRIES.reduce((a,c)=>a+(c.points||0),0);
+  $('points').textContent = 'Очки: '+total;
+}
+
+// --- Actions ---
+async function doAction(action,el){
+  if(!USER) { alert('Нужна авторизация'); return;}
+  const cost = parseInt(el.dataset.cost||0);
+  const unit = el.dataset.unit;
+  const countryId = COUNTRIES[0]?.id || 1; // пока выбираем первую страну
+  if(action==='buy-unit'){
+    const res = await fetch(`${API}/api`,{
+      method:'POST',
+      headers:{'Content-Type':'application/json','Authorization':'Bearer '+TOKEN},
+      body: JSON.stringify({op:'buy_unit',countryId,unit,cost})
+    });
+    const r=await res.json();
+    if(r.ok){ alert('Куплено!'); await loadCountries();}
+    else alert(r.message);
+  }
+  if(action==='declare-war'){
+    const defenderId=prompt('ID страны для войны?');
+    const res = await fetch(`${API}/api`,{
+      method:'POST',
+      headers:{'Content-Type':'application/json','Authorization':'Bearer '+TOKEN},
+      body: JSON.stringify({op:'declare_war',attackerId:countryId,defenderId})
+    });
+    const r=await res.json();
+    alert(r.ok?'Война объявлена!':r.message);
+    await loadCountries();
+  }
+  if(action==='attack'){
+    const defenderId=prompt('ID страны для атаки?');
+    const res = await fetch(`${API}/api`,{
+      method:'POST',
+      headers:{'Content-Type':'application/json','Authorization':'Bearer '+TOKEN},
+      body: JSON.stringify({op:'attack',attackerId:countryId,defenderId})
+    });
+    const r=await res.json();
+    alert(r.ok?'Атака прошла! Потери врага: '+r.lost:r.message);
+    await loadCountries();
   }
 }
 
-async function loadCountries(){
-  const r = await API.post('/api', {op:'list'});
-  state.countries = r.countries;
-  renderSelectedInfo();
-}
-
-function bindMap(){
-  const obj = document.getElementById('map');
-  obj.addEventListener('load', ()=>{
-    const svg = obj.contentDocument;
-    if(!svg) return;
-    svg.querySelectorAll('[id^="c-"], [data-country-id]').forEach(el => {
-      el.style.cursor = 'pointer';
-      el.addEventListener('click', ()=>{
-        const id = el.getAttribute('data-country-id') || el.id.replace('c-','');
-        state.selectedCountryId = id;
-        renderSelectedInfo();
-      });
-      el.addEventListener('mousemove', (ev)=> showTooltip(ev, el));
-      el.addEventListener('mouseleave', hideTooltip);
+// --- Admin ---
+$('admin-panel').onclick=e=>{
+  const btn=e.target.closest('button');
+  if(!btn) return;
+  const op=btn.dataset.admin;
+  if(op==='create-country'){
+    const name=prompt('Название страны?');
+    if(!name) return;
+    fetch(`${API}/api`,{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+TOKEN},
+      body: JSON.stringify({op:'create_country',name})}).then(r=>r.json()).then(r=>{alert('Создано!'); loadCountries();});
+  }
+  if(op==='view-logs'){
+    fetch(`${API}/logs`).then(r=>r.json()).then(data=>{
+      $('logs-view').textContent=data.map(l=>`${l.timestamp}: ${l.text}`).join('\n');
+      dlgLogs.showModal();
     });
+  }
+};
+
+// --- Map hover ---
+$('map').addEventListener('load',()=>{
+  const svg = $('map').contentDocument;
+  if(!svg) return;
+  svg.querySelectorAll('path').forEach(p=>{
+    p.addEventListener('mouseenter',e=>{
+      const id = p.id;
+      const c = COUNTRIES.find(x=>x.name===id);
+      if(c){
+        const tip=$('tooltip');
+        tip.textContent=c.name;
+        tip.style.left=e.pageX+'px';
+        tip.style.top=e.pageY+'px';
+        show(tip);
+        updateInfo(c.id);
+      }
+    });
+    p.addEventListener('mouseleave',()=>{hide($('tooltip')); updateInfo(null);});
   });
-}
+});
 
-function showTooltip(ev, el){
-  const tip = $('#tooltip');
-  const id = el.getAttribute('data-country-id') || el.id.replace('c-','');
-  const c = state.countries[id];
-  tip.innerHTML = c ? `<b>${c.name}</b><br/>Экономика: ${c.economy}<br/>Очки: ${c.points}` : `Страна ${id}`;
-  tip.style.left = ev.clientX + 'px';
-  tip.style.top = ev.clientY + 'px';
-  setHidden(tip, false);
-}
-function hideTooltip(){ setHidden($('#tooltip'), true) }
+// --- Global action buttons ---
+document.querySelectorAll('[data-action]').forEach(btn=>{
+  btn.onclick=()=>doAction(btn.dataset.action,btn);
+});
 
-function renderSelectedInfo(){
-  const id = state.selectedCountryId;
-  const c = id ? state.countries[id] : null;
-  $('#info-country').textContent = c ? `${c.name} (ID ${id})` : '—';
-  $('#info-owner').textContent = c?.owner || '—';
-  $('#info-econ').textContent = c?.economy ?? 0;
-  $('#info-army').textContent = c ? JSON.stringify(c.army) : 'нет';
-  $('#info-status').textContent = c?.status || 'мир';
-  $('#points').textContent = 'Очки: ' + (c?.points ?? 0);
-}
-
-function promptDialog(title, onOk){
-  $('#prompt-title').textContent = title;
-  $('#prompt-input').value='';
-  $('#dlg-prompt').showModal();
-  $('#prompt-ok').onclick = (e)=>{ e.preventDefault(); $('#dlg-prompt').close(); onOk($('#prompt-input').value.trim()) }
-}
-
-function tickUI(){ setTimeout(tickUI, 20000) }
-window.addEventListener('DOMContentLoaded', init);
+// --- Init ---
+checkSession();
+loadCountries();
