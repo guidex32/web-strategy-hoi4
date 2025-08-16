@@ -7,45 +7,41 @@ const $ = id => document.getElementById(id);
 const dlgAuth = $('dlg-auth');
 const dlgLogs = $('dlg-logs');
 
-function show(el) { el.classList.remove('hidden'); }
-function hide(el) { el.classList.add('hidden'); }
+function show(el){ el.classList.remove('hidden'); }
+function hide(el){ el.classList.add('hidden'); }
 
 // --- Auth ---
-async function apiAuth(op, data) {
-  try {
-    const res = await fetch(`${API}/auth`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': TOKEN ? 'Bearer ' + TOKEN : ''
-      },
-      body: JSON.stringify({ op, ...data })
-    });
-    return await res.json();
-  } catch (e) {
-    console.error('Ошибка fetch /api/auth:', e);
-    alert('Ошибка связи с сервером');
-    return { ok: false, message: e.message };
-  }
+async function apiAuth(op, data){
+  const res = await fetch(`${API}/auth`,{
+    method:'POST',
+    headers:{
+      'Content-Type':'application/json',
+      'Authorization': TOKEN ? 'Bearer '+TOKEN : ''
+    },
+    body: JSON.stringify({op, ...data})
+  });
+  return res.json();
 }
 
-async function checkSession() {
-  if (!TOKEN) {
+async function checkSession(){
+  if(!TOKEN) {
     USER = null;
     hide($('user-info')); hide($('btn-logout')); show($('btn-login'));
     hide($('admin-panel'));
     return false;
   }
+
   const r = await apiAuth('session', {});
-  if (r.ok && r.user) {
+  if(r.user){
     USER = r.user;
-    $('user-info').textContent = USER.login + ' (' + USER.role + ')';
+    $('user-info').textContent = USER.login+' ('+USER.role+')';
     show($('user-info')); show($('btn-logout')); hide($('btn-login'));
-    if (['admin', 'owner'].includes(USER.role)) show($('admin-panel'));
+    if(USER.role==='admin' || USER.role==='owner') show($('admin-panel'));
     else hide($('admin-panel'));
     return true;
   } else {
-    TOKEN = ''; USER = null;
+    USER = null;
+    TOKEN = '';
     localStorage.removeItem('token');
     hide($('user-info')); hide($('btn-logout')); show($('btn-login'));
     hide($('admin-panel'));
@@ -54,37 +50,58 @@ async function checkSession() {
 }
 
 // --- Login/Register ---
-$('btn-login').onclick = () => dlgAuth.showModal();
-$('btn-logout').onclick = async () => {
-  TOKEN = ''; USER = null; localStorage.removeItem('token');
-  await checkSession();
-};
+window.addEventListener('DOMContentLoaded', ()=>{
+  const btnLogin = $('btn-login');
+  const btnLogout = $('btn-logout');
+  const btnRegister = $('btn-register');
+  const btnSignin = $('btn-signin');
 
-$('btn-register').onclick = async () => {
-  const login = $('reg-login').value.trim();
-  const password = $('reg-password').value.trim();
-  if (!login || !password) return alert('Введите логин и пароль');
-  const r = await apiAuth('register', { login, password });
-  if (r.ok) {
-    TOKEN = r.token; USER = r.user;
-    localStorage.setItem('token', TOKEN);
-    await checkSession(); dlgAuth.close();
-  } else alert(r.message);
-};
+  if(btnLogin) btnLogin.onclick = ()=>dlgAuth.showModal();
+  if(btnLogout) btnLogout.onclick = async ()=>{
+    TOKEN=''; USER=null;
+    localStorage.removeItem('token');
+    await checkSession();
+  };
+  if(btnRegister) btnRegister.onclick = async e=>{
+    e.preventDefault();
+    const login=$('auth-username').value.trim();
+    const pass=$('auth-password').value.trim();
+    if(!login || !pass) return alert('Введите логин и пароль');
+    const r = await apiAuth('register',{login,password:pass});
+    if(r.ok){
+      TOKEN=r.token; USER=r.user;
+      localStorage.setItem('token', TOKEN);
+      dlgAuth.close();
+      await checkSession();
+      await loadCountries();
+    } else alert(r.message);
+  };
+  if(btnSignin) btnSignin.onclick = async e=>{
+    e.preventDefault();
+    const login=$('auth-username').value.trim();
+    const pass=$('auth-password').value.trim();
+    if(!login || !pass) return alert('Введите логин и пароль');
+    const r = await apiAuth('login',{login,password:pass});
+    if(r.ok){
+      TOKEN=r.token; USER=r.user;
+      localStorage.setItem('token', TOKEN);
+      dlgAuth.close();
+      await checkSession();
+      await loadCountries();
+    } else alert(r.message);
+  };
+});
 
-$('btn-login-do').onclick = async () => {
-  const login = $('login-login').value.trim();
-  const password = $('login-password').value.trim();
-  if (!login || !password) return alert('Введите логин и пароль');
-  const r = await apiAuth('login', { login, password });
-  if (r.ok) {
-    TOKEN = r.token; USER = r.user;
-    localStorage.setItem('token', TOKEN);
-    await checkSession(); dlgAuth.close();
-  } else alert(r.message);
-};
+// --- Load countries ---
+async function loadCountries(){
+  if(!TOKEN) return;
+  const res = await fetch(`${API}/countries`,{
+    headers:{'Authorization':'Bearer '+TOKEN}
+  });
+  const data = await res.json();
+  COUNTRIES = Object.values(data);
+  console.log('Countries loaded:', COUNTRIES);
+}
 
-// --- Init ---
-window.onload = async () => {
-  await checkSession();
-};
+// --- Initial check ---
+checkSession();
