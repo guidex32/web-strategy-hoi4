@@ -17,100 +17,111 @@ const dbConfig = {
 };
 
 let pool;
-(async () => { pool = await mysql.createPool(dbConfig); })();
+async function initDB() {
+  try {
+    pool = await mysql.createPool(dbConfig);
+    console.log('DB pool created');
+  } catch (e) {
+    console.error('DB connection error:', e);
+    process.exit(1);
+  }
+}
+
+initDB();
 
 app.use(cors());
 app.use(bodyParser.json());
-app.use(express.static(path.join(__dirname,'public')));
+app.use(express.static(path.join(__dirname, 'public')));
 
 const SECRET = 'supersecretkey123';
 
-// verify token middleware
-async function verifyToken(req,res,next){
+// Middleware для проверки токена
+async function verifyToken(req, res, next) {
   const header = req.headers['authorization'];
-  if(!header) return res.status(401).json({ok:false,message:'No token'});
+  if (!header) return res.status(401).json({ ok: false, message: 'No token' });
   const token = header.split(' ')[1];
-  try{
-    const decoded = jwt.verify(token,SECRET);
+  try {
+    const decoded = jwt.verify(token, SECRET);
     req.user = decoded;
     next();
-  }catch(e){ res.status(401).json({ok:false,message:'Invalid token'}); }
+  } catch (e) {
+    return res.status(401).json({ ok: false, message: 'Invalid token' });
+  }
 }
 
 // --- Auth ---
-app.post('/api/auth', async (req,res)=>{
-  const {op, login, password} = req.body;
+app.post('/api/auth', async (req, res) => {
+  const { op, login, password } = req.body;
+  try {
+    if (op === 'register') {
+      const [rows] = await pool.query('SELECT * FROM users WHERE login=?', [login]);
+      if (rows.length) return res.json({ ok: false, message: 'Логин занят' });
+      await pool.query('INSERT INTO users(login,password,role) VALUES(?,?,?)', [login, password, 'player']);
+      const [newUser] = await pool.query('SELECT * FROM users WHERE login=?', [login]);
+      const token = jwt.sign({ id: newUser[0].id, login: newUser[0].login, role: newUser[0].role }, SECRET);
+      return res.json({ ok: true, token, user: newUser[0] });
+    }
 
-  if(op==='register'){
-    try{
-      const [rows] = await pool.query('SELECT * FROM users WHERE login=?',[login]);
-      if(rows.length) return res.json({ok:false,message:'Логин занят'});
-      await pool.query('INSERT INTO users(login,password,role) VALUES(?,?,?)',[login,password,'player']);
-      const [newUser] = await pool.query('SELECT * FROM users WHERE login=?',[login]);
-      const token = jwt.sign({id:newUser[0].id,login:newUser[0].login,role:newUser[0].role},SECRET);
-      return res.json({ok:true,token,user:newUser[0]});
-    }catch(e){ return res.json({ok:false,message:e.message}); }
-  }
-
-  if(op==='login'){
-    try{
-      const [rows] = await pool.query('SELECT * FROM users WHERE login=? AND password=?',[login,password]);
-      if(rows.length===0) return res.json({ok:false,message:'Неверный логин или пароль'});
+    if (op === 'login') {
+      const [rows] = await pool.query('SELECT * FROM users WHERE login=? AND password=?', [login, password]);
+      if (rows.length === 0) return res.json({ ok: false, message: 'Неверный логин или пароль' });
       const user = rows[0];
-      const token = jwt.sign({id:user.id,login:user.login,role:user.role},SECRET);
-      return res.json({ok:true,token,user});
-    }catch(e){ return res.json({ok:false,message:e.message}); }
-  }
+      const token = jwt.sign({ id: user.id, login: user.login, role: user.role }, SECRET);
+      return res.json({ ok: true, token, user });
+    }
 
-  if(op==='session'){
-    // проверяем токен через verifyToken
-    verifyToken(req,res,()=>{
-      return res.json({ok:true,user:req.user});
-    });
+    if (op === 'session') {
+      if (!req.headers['authorization']) return res.json({ ok: false, message: 'No token' });
+      const token = req.headers['authorization'].split(' ')[1];
+      try {
+        const decoded = jwt.verify(token, SECRET);
+        return res.json({ ok: true, user: decoded });
+      } catch (e) {
+        return res.json({ ok: false, message: 'Invalid token' });
+      }
+    }
+
+    res.json({ ok: false, message: 'Неизвестная операция' });
+  } catch (e) {
+    console.error('AUTH ERROR:', e);
+    res.json({ ok: false, message: e.message });
   }
 });
 
 // --- Countries ---
-app.get('/api/countries', verifyToken, async (req,res)=>{
-  try{
+app.get('/api/countries', verifyToken, async (req, res) => {
+  try {
     const [rows] = await pool.query('SELECT * FROM countries');
     const countries = {};
-    rows.forEach(c=>{
-      countries[c.id]={
-        id:c.id,
-        name:c.name,
-        owner:c.owner,
-        economy:c.economy,
-        army:JSON.parse(c.army||'{}'),
-        status:c.status,
-        points:c.points,
-        x:c.x||0,
-        y:c.y||0
-      }
+    rows.forEach(c => {
+      countries[c.id] = {
+        id: c.id,
+        name: c.name,
+        owner: c.owner,
+        economy: c.economy,
+        army: JSON.parse(c.army || '{}'),
+        status: c.status,
+        points: c.points,
+        x: c.x || 0,
+        y: c.y || 0
+      };
     });
     res.json(countries);
-  }catch(e){ res.json({ok:false,message:e.message}); }
+  } catch (e) {
+    console.error('COUNTRIES ERROR:', e);
+    res.json({ ok: false, message: e.message });
+  }
 });
 
-// --- Actions ---
-app.post('/api', verifyToken, async (req,res)=>{
-  const {op,countryId,unit,cost,attackerId,defenderId,name,x,y,amount,login} = req.body;
-  try{
-    // ... оставляем все действия как у тебя, они рабочие ...
-    res.json({ok:false,message:'Неизвестная операция'});
-  }catch(e){ res.json({ok:false,message:e.message}); }
-});
-
-// --- Logs ---
-app.get('/logs', verifyToken, async (req,res)=>{
-  if(req.user.role!=='admin') return res.json([]);
-  try{
-    const [rows] = await pool.query('SELECT * FROM logs ORDER BY timestamp DESC');
-    res.json(rows);
-  }catch(e){ res.json([]); }
+// --- Логирование ошибок сервера
+app.use((err, req, res, next) => {
+  console.error('SERVER ERROR:', err);
+  res.status(500).json({ ok: false, message: err.message });
 });
 
 // --- Front ---
-app.get('*',(req,res)=>{ res.sendFile(path.join(__dirname,'public','index.html')); });
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
 
-app.listen(PORT,()=>console.log('Server running on port '+PORT));
+app.listen(PORT, () => console.log('Server running on port ' + PORT));
