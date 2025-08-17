@@ -9,10 +9,12 @@ function hide(el){ if(el) el.classList.add('hidden'); }
 
 async function apiAuth(op,data){
   try{
+    const headers = {'Content-Type':'application/json'};
+    if(TOKEN) headers['Authorization'] = 'Bearer '+TOKEN;
     const res = await fetch(`${API}/auth`,{
       method:'POST',
-      headers:{'Content-Type':'application/json','Authorization':TOKEN?'Bearer '+TOKEN:''},
-      body: JSON.stringify({op,...data})
+      headers,
+      body:JSON.stringify({op,...data})
     });
     return await res.json();
   }catch(e){ return {ok:false,message:e.message}; }
@@ -20,15 +22,19 @@ async function apiAuth(op,data){
 
 async function checkSession(){
   if(!TOKEN){ USER=null; hide($('user-info')); hide($('btn-logout')); show($('btn-login')); hide($('admin-panel')); return false; }
-  const r = await apiAuth('session',{}); 
-  if(r.user){
+  const r = await apiAuth('session',{});
+  if(r.ok && r.user){
     USER = r.user;
     const info = $('user-info'); if(info) info.textContent = `${USER.login} (${USER.role})`;
     show($('user-info')); show($('btn-logout')); hide($('btn-login'));
     if(USER.role==='admin'||USER.role==='owner') show($('admin-panel')); else hide($('admin-panel'));
     await loadCountries();
     return true;
-  }else{ USER=null; TOKEN=''; localStorage.removeItem('token'); hide($('user-info')); hide($('btn-logout')); show($('btn-login')); hide($('admin-panel')); return false; }
+  }else{
+    USER=null; TOKEN=''; localStorage.removeItem('token'); 
+    hide($('user-info')); hide($('btn-logout')); show($('btn-login')); hide($('admin-panel'));
+    return false;
+  }
 }
 
 async function loadCountries(){
@@ -51,23 +57,24 @@ function promptAsync(message){
     dlg.showModal();
     const ok = $('prompt-ok');
 
-    const handler = (ev)=>{ 
+    const handler = (ev)=>{
       ev.preventDefault();
-      dlg.close(); 
-      ok.removeEventListener('click',handler); 
+      dlg.close();
+      ok.removeEventListener('click',handler);
       resolve(input.value.trim());
     };
     ok.addEventListener('click',handler);
   });
 }
 
-// --- create country flow ---
 async function createCountryFlow(){
+  const availableFlags = ['flag_chern','flag_blue','flag_red'];
+
   const name = await promptAsync("Введите название страны (только буквы, максимум 256)");
   if(!name.match(/^[a-zA-Zа-яА-Я\s]{1,256}$/)) return alert("Некорректное название!");
 
-  const flag = await promptAsync("Введите название флага (только название файла без .png/.jpg):");
-  if(!flag) return alert("Нужно указать название флага!");
+  const flag = await promptAsync("Введите название флага (доступные: " + availableFlags.join(', ') + ")\nТолько имя, без .png/.jpg");
+  if(!availableFlags.includes(flag)) return alert("Такого флага нет!");
 
   alert("Теперь кликните по карте для установки позиции страны");
   const map = $('map');
@@ -82,11 +89,14 @@ async function createCountryFlow(){
         const res = await fetch(`${API}`,{
           method:'POST',
           headers:{'Content-Type':'application/json','Authorization':'Bearer '+TOKEN},
-          body:JSON.stringify({op:'create_country',name,flag:x+'.png',x,y})
+          body:JSON.stringify({op:'create_country',name,flag,x,y})
         });
         const data = await res.json();
-        if(data.ok){ alert("Страна создана!"); await loadCountries(); }
-        else alert("Ошибка: "+data.message);
+        console.log('Create country response:', data);
+        if(data.ok){ 
+          alert("Страна создана!"); 
+          await loadCountries(); 
+        } else alert("Ошибка: "+data.message);
       }catch(e){ alert("Ошибка: "+e.message); }
       resolve();
     };
@@ -94,7 +104,6 @@ async function createCountryFlow(){
   });
 }
 
-// --- assign owner ---
 async function assignOwnerFlow(){
   const id = await promptAsync("Введите ID страны");
   if(!id) return;
@@ -112,7 +121,6 @@ async function assignOwnerFlow(){
   }catch(e){ alert("Ошибка: "+e.message); }
 }
 
-// --- toggle economy ---
 async function toggleEconomyFlow(){
   try{
     const res = await fetch(`${API}`,{
@@ -126,7 +134,6 @@ async function toggleEconomyFlow(){
   }catch(e){ alert("Ошибка: "+e.message); }
 }
 
-// --- give points ---
 async function givePointsFlow(){
   const id = await promptAsync("Введите ID страны");
   const amount = await promptAsync("Введите количество очков");
@@ -142,52 +149,4 @@ async function givePointsFlow(){
   }catch(e){ alert("Ошибка: "+e.message); }
 }
 
-// --- view logs ---
 async function viewLogsFlow(){
-  try{
-    const res = await fetch(`${API}/logs`,{headers:{'Authorization':'Bearer '+TOKEN}});
-    const data = await res.json();
-    if(Array.isArray(data)) $('logs-view').textContent = data.map(l=>`${l.timestamp} ${l.user} ${l.action} (${l.role})`).join('\n');
-    $('dlg-logs').showModal();
-  }catch(e){ alert("Ошибка: "+e.message); }
-}
-
-// --- DOMContentLoaded ---
-window.addEventListener('DOMContentLoaded',()=>{
-  const btnLogin = $('btn-login');
-  const btnLogout = $('btn-logout');
-  const btnRegister = $('btn-register');
-  const btnSignin = $('btn-signin');
-  const dlgAuth = $('dlg-auth');
-
-  if(btnLogin) btnLogin.onclick=()=>dlgAuth.showModal();
-  if(btnLogout) btnLogout.onclick=()=>{
-    TOKEN=''; localStorage.removeItem('token'); USER=null; checkSession();
-  };
-
-  if(btnRegister) btnRegister.onclick=async()=>{
-    const login = $('auth-login').value.trim();
-    const pass = $('auth-pass').value.trim();
-    if(!login||!pass) return alert('Введите данные');
-    const r = await apiAuth('register',{login,password:pass});
-    if(r.ok){ TOKEN=r.token; localStorage.setItem('token',TOKEN); checkSession(); dlgAuth.close(); }
-    else alert(r.message);
-  };
-  if(btnSignin) btnSignin.onclick=async()=>{
-    const login = $('auth-login').value.trim();
-    const pass = $('auth-pass').value.trim();
-    if(!login||!pass) return alert('Введите данные');
-    const r = await apiAuth('login',{login,password:pass});
-    if(r.ok){ TOKEN=r.token; localStorage.setItem('token',TOKEN); checkSession(); dlgAuth.close(); }
-    else alert(r.message);
-  };
-
-  // admin buttons
-  $('btn-create-country')?.addEventListener('click',createCountryFlow);
-  $('btn-assign-owner')?.addEventListener('click',assignOwnerFlow);
-  $('btn-toggle-economy')?.addEventListener('click',toggleEconomyFlow);
-  $('btn-give-points')?.addEventListener('click',givePointsFlow);
-  $('btn-view-logs')?.addEventListener('click',viewLogsFlow);
-
-  checkSession();
-});
