@@ -1,4 +1,3 @@
-// server.js (ПФ)
 const express = require('express');
 const cors = require('cors');
 const mysql = require('mysql2/promise');
@@ -221,7 +220,7 @@ app.post('/api', verifyToken, async (req, res) => {
 
 // --- Logs ---
 app.get('/logs', verifyToken, async (req, res) => {
-  if (req.user.role !== 'admin') return res.json([]);
+  if (!['admin'].includes(req.user.role)) return res.json([]);
   try {
     const [rows] = await pool.query('SELECT * FROM logs ORDER BY timestamp DESC');
     await pool.query('INSERT INTO logs(user,action,timestamp) VALUES(?,?,NOW())',[req.user.login,'Просмотрел логи']);
