@@ -150,3 +150,43 @@ async function givePointsFlow(){
 }
 
 async function viewLogsFlow(){
+  try{
+    const res = await fetch(`${API}/logs`,{headers:{'Authorization':'Bearer '+TOKEN}});
+    const data = await res.json();
+    console.log('Logs from server:', data);
+    if(Array.isArray(data) && data.length){
+      $('logs-view').textContent = data.map(l=>`${l.timestamp} ${l.user} ${l.action}`).join('\n');
+    } else {
+      $('logs-view').textContent = "Логи пусты";
+    }
+    $('dlg-logs').showModal();
+  }catch(e){ alert("Ошибка: "+e.message); }
+}
+
+// --- Events ---
+$('btn-login').addEventListener('click',async()=>{
+  const login = prompt('Логин:'); 
+  const password = prompt('Пароль:'); 
+  if(!login||!password) return;
+  const r = await apiAuth('login',{login,password});
+  if(r.ok){
+    TOKEN = r.token;
+    localStorage.setItem('token',TOKEN);
+    await checkSession();
+    alert("Успешно!");
+  } else alert(r.message);
+});
+
+$('btn-logout').addEventListener('click',async()=>{
+  TOKEN=''; USER=null; localStorage.removeItem('token');
+  hide($('user-info')); hide($('btn-logout')); show($('btn-login')); hide($('admin-panel'));
+});
+
+$('btn-create-country').addEventListener('click',createCountryFlow);
+$('btn-assign-owner').addEventListener('click',assignOwnerFlow);
+$('btn-toggle-economy').addEventListener('click',toggleEconomyFlow);
+$('btn-give-points').addEventListener('click',givePointsFlow);
+$('btn-view-logs').addEventListener('click',viewLogsFlow);
+
+// --- Init ---
+checkSession();
