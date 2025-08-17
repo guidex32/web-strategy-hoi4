@@ -65,8 +65,8 @@
       <input type="text" id="auth-username" placeholder="Логин" required />
       <input type="password" id="auth-password" placeholder="Пароль" required />
       <div class="row">
-        <button id="btn-register" class="btn">Регистрация</button>
-        <button id="btn-signin" class="btn btn-primary">Войти</button>
+        <button type="button" id="btn-register" class="btn">Регистрация</button>
+        <button type="button" id="btn-signin" class="btn btn-primary">Войти</button>
         <button class="btn btn-ghost" value="cancel">Закрыть</button>
       </div>
       <small>Роли: admin / owner / player. Админа можно назначить вручную</small>
@@ -91,6 +91,25 @@
       <div class="row"><button class="btn btn-primary">Закрыть</button></div>
     </form>
   </dialog>
+
+  <script>
+    // защита от null и подключение кнопок
+    const btnLogin = document.getElementById('btn-login');
+    const btnLogout = document.getElementById('btn-logout');
+    const userInfo = document.getElementById('user-info');
+    const dlgAuth = document.getElementById('dlg-auth');
+
+    if (btnLogin && btnLogout && userInfo && dlgAuth) {
+      btnLogin.onclick = () => dlgAuth.showModal();
+      btnLogout.onclick = () => {
+        localStorage.removeItem('token');
+        userInfo.classList.add('hidden');
+        userInfo.textContent = '';
+        btnLogout.classList.add('hidden');
+        btnLogin.classList.remove('hidden');
+      };
+    }
+  </script>
 
   <script src="js/app.js"></script>
 </body>
