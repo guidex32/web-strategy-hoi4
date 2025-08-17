@@ -4,27 +4,16 @@ let TOKEN = localStorage.getItem('token') || '';
 let USER = null;
 let COUNTRIES = [];
 
+// =================== HELPERS ===================
 const $ = id => document.getElementById(id);
 function show(el){ if(el) el.classList.remove('hidden'); }
 function hide(el){ if(el) el.classList.add('hidden'); }
 
-// =================== HELPERS ===================
 function buildHeaders(json = true){
   const h = {};
   if(json) h['Content-Type'] = 'application/json';
   if(TOKEN) h['Authorization'] = 'Bearer ' + TOKEN;
   return h;
-}
-
-async function apiAuth(op, data){
-  try{
-    const res = await fetch(`${API}/auth`, {
-      method: 'POST',
-      headers: buildHeaders(true),
-      body: JSON.stringify({ op, ...data })
-    });
-    return await res.json();
-  }catch(e){ return { ok:false, message: e.message }; }
 }
 
 async function apiPost(op, data){
@@ -38,6 +27,42 @@ async function apiPost(op, data){
   }catch(e){ return { ok:false, message: e.message }; }
 }
 
+async function apiAuth(op, data){
+  try{
+    const res = await fetch(`${API}/auth`, {
+      method: 'POST',
+      headers: buildHeaders(true),
+      body: JSON.stringify({ op, ...data })
+    });
+    return await res.json();
+  }catch(e){ return { ok:false, message: e.message }; }
+}
+
+function promptAsync(message){
+  return new Promise(resolve => {
+    const input = $('prompt-input');
+    const dlg = $('dlg-prompt');
+    const title = $('prompt-title');
+    if(!input || !dlg || !title) {
+      const val = window.prompt(message);
+      resolve(val ? val.trim() : '');
+      return;
+    }
+    title.textContent = message;
+    input.value = '';
+    dlg.showModal();
+    const ok = $('prompt-ok');
+
+    const handler = ev => {
+      ev.preventDefault();
+      dlg.close();
+      ok.removeEventListener('click', handler);
+      resolve(input.value.trim());
+    };
+    ok.addEventListener('click', handler);
+  });
+}
+
 // =================== SESSION ===================
 async function checkSession(){
   if(!TOKEN){
@@ -45,6 +70,7 @@ async function checkSession(){
     hide($('user-info')); hide($('btn-logout')); show($('btn-login')); hide($('admin-panel'));
     return false;
   }
+
   const r = await apiAuth('session', {});
   if(r.ok && r.user){
     USER = r.user;
@@ -69,7 +95,6 @@ async function loadCountries(){
     if(data && data.ok === false){ console.warn('countries:', data.message); return; }
     COUNTRIES = Object.values(data || {});
     updatePoints();
-    console.log('Countries loaded:', COUNTRIES);
   }catch(e){ console.error(e); }
 }
 
@@ -80,60 +105,44 @@ function updatePoints(){
   if(p) p.textContent = 'Очки: ' + total;
 }
 
-// =================== PROMPT ===================
-function promptAsync(message){
-  return new Promise(resolve => {
-    const input = $('prompt-input');
-    const dlg = $('dlg-prompt');
-    const title = $('prompt-title');
-    if(!input || !dlg || !title){
-      const val = window.prompt(message);
-      resolve(val ? val.trim() : '');
-      return;
-    }
-    title.textContent = message;
-    input.value = '';
-    dlg.showModal();
-    const ok = $('prompt-ok');
-
-    const handler = ev => {
-      ev.preventDefault();
-      dlg.close();
-      ok.removeEventListener('click', handler);
-      resolve(input.value.trim());
-    };
-    ok.addEventListener('click', handler);
-  });
-}
-
-// =================== FLOWS ===================
-
-// --- CREATE COUNTRY ---
+// =================== CREATE COUNTRY FLOW ===================
 async function createCountryFlow(){
-  if(!USER || USER.role !== 'owner') return alert('Нет прав! Только владелец может создавать страну');
+  if(!(USER.role==='owner' || USER.role==='admin')) return alert('Нет прав');
 
-  const resFlags = await fetch(`${API}/flags`);
-  const availableFlags = resFlags.ok ? await resFlags.json() : [];
-  if(!availableFlags.length) return alert('Флаги недоступны на сервере');
+  // Название страны
+  const name = await promptAsync("Введите название страны (только буквы, макс 256)");
+  if(!name || name.length>256 || /[^a-zA-Zа-яА-ЯёЁ\s]/.test(name)) return alert("Некорректное название!");
 
-  const name = await promptAsync("Введите название страны (макс 256 символов, любые буквы)");
-  if(!name || name.length>256) return alert("Некорректное название!");
+  // Проверка в БД, что такой страны нет
+  const check = await apiPost('check_country', { name });
+  if(!check.ok) return alert(check.message || 'Ошибка проверки страны');
 
-  const flag = await promptAsync("Введите название флага (доступные: " + availableFlags.join(', ') + ")");
-  if(!flag || !availableFlags.includes(flag)) return alert("Такого флага нет!");
+  // Получаем список флагов
+  const flagsRes = await apiPost('get_flags', {});
+  if(!flagsRes.ok || !Array.isArray(flagsRes.flags)) return alert('Ошибка получения списка флагов');
+  alert('Доступные флаги: ' + flagsRes.flags.join(', '));
 
-  alert("Теперь кликните по карте для установки позиции страны");
+  const flag = await promptAsync('Введите название флага из списка выше (без расширения)');
+  if(!flag || !flagsRes.flags.includes(flag)) return alert('Флаг не найден!');
+
+  // Выбор владельца
+  const owner = await promptAsync('Введите логин владельца страны');
+  if(!owner) return;
+  const ownerCheck = await apiPost('check_user', { login: owner });
+  if(!ownerCheck.ok) return alert(ownerCheck.message || 'Пользователь не найден или уже имеет страну');
+
+  alert('Теперь кликните по карте, где будет расположена страна');
   const mapObj = $('map');
   if(!mapObj) return alert('Элемент карты не найден');
 
-  return new Promise(resolve=>{
-    const handler = async e=>{
+  return new Promise(resolve => {
+    const handler = async e => {
       const rect = mapObj.getBoundingClientRect();
       const x = Math.round(e.clientX - rect.left);
       const y = Math.round(e.clientY - rect.top);
       mapObj.removeEventListener('click', handler);
 
-      const res = await apiPost('create_country',{ name, flag, x, y });
+      const res = await apiPost('create_country', { name, flag, owner, x, y });
       if(res.ok){ alert('Страна создана'); await loadCountries(); }
       else alert('Ошибка: ' + (res.message||'unknown'));
       resolve();
@@ -142,93 +151,73 @@ async function createCountryFlow(){
   });
 }
 
-// --- LOGS ---
+// =================== VIEW LOGS ===================
 async function viewLogsFlow(){
-  if(!USER || !(USER.role==='admin'||USER.role==='owner')) return alert('Нет прав на просмотр логов');
-
+  if(!(USER.role==='owner' || USER.role==='admin')) return alert('Нет прав');
   try{
     const res = await fetch(`${API}/logs`, { headers: buildHeaders(true) });
-    if(!res.ok) return alert('Ошибка загрузки логов');
     const data = await res.json();
-    if(Array.isArray(data) && data.length) {
-      $('logs-view').textContent = data.map(l=>`${l.timestamp} ${l.user} ${l.role} ${l.action}`).join('\n');
-    } else {
-      $('logs-view').textContent = 'Логи пусты';
-    }
+    if(!Array.isArray(data)) return alert('Ошибка: нет данных JSON');
+    $('logs-view').textContent = data.map(l => `${l.timestamp} ${l.user} (${l.role}) — ${l.action}`).join('\n');
     const dlg = $('dlg-logs'); if(dlg) dlg.showModal();
   }catch(e){ alert('Ошибка: ' + e.message); }
 }
 
-// --- GIVE POINTS ---
-async function givePointsFlow(){
-  if(!USER || !(USER.role==='admin'||USER.role==='owner')) return alert('Нет прав на выдачу очков');
+// =================== BUILDINGS / ECONOMY ===================
+const BUILDINGS = [
+  { name:'Офис', cost:10, income:5 },
+  { name:'Военная база', cost:30, income:15 },
+  { name:'Аэропорт', cost:100, income:50 },
+  { name:'Нефтекачка', cost:500, income:200 }
+];
 
-  const id = await promptAsync("Введите ID страны");
-  const amount = await promptAsync("Введите количество очков");
-  if(!id || isNaN(amount) || amount.trim()==='') return alert("Только число!");
-  const res = await apiPost('give_points',{ countryId:id, amount });
-  if(res.ok){ alert('Очки выданы'); await loadCountries(); }
-  else alert('Ошибка: ' + (res.message||'unknown'));
+async function buildBuildingFlow(){
+  if(!USER) return alert('Войдите');
+  const countryId = await promptAsync('Введите ID вашей страны');
+  if(!countryId) return;
+
+  const country = COUNTRIES.find(c=>c.id==countryId);
+  if(!country || country.owner!==USER.login) return alert('Вы не владеете этой страной');
+
+  const options = BUILDINGS.map(b=>`${b.name} (стоимость ${b.cost})`).join('\n');
+  const choice = await promptAsync('Выберите здание:\n' + options);
+  const building = BUILDINGS.find(b=>b.name.toLowerCase()===choice.toLowerCase());
+  if(!building) return alert('Неверный выбор здания');
+  if((country.points||0) < building.cost) return alert('Недостаточно очков');
+
+  const res = await apiPost('build', { countryId, building: building.name });
+  if(res.ok){
+    alert(`Здание построено: ${building.name}, доход +${building.income}/час`);
+    await loadCountries();
+  } else alert('Ошибка: ' + (res.message||'unknown'));
 }
 
-// --- TOGGLE ECONOMY ---
-async function toggleEconomyFlow(){
-  const res = await apiPost('toggle_economy',{});
-  if(res.ok) alert('Экономика теперь: ' + (res.value?'Включена':'Выключена'));
-  else alert('Ошибка: ' + (res.message||'unknown'));
-}
-
-// =================== ACTIONS ===================
+// =================== BIND ACTION BUTTONS ===================
 function bindActionButtons(){
   document.querySelectorAll('#actions .btn').forEach(btn=>{
     btn.addEventListener('click', async ()=>{
-      if(!USER) return alert('Сначала войдите');
+      if(!USER) { alert('Сначала войдите'); return; }
       const action = btn.dataset.action;
       if(action==='admin-open'){ show($('admin-panel')); return; }
-      if(action==='economy-spend'){ await toggleEconomyFlow(); await loadCountries(); return; }
-      if(action==='buy-unit'){
-        const unit = btn.dataset.unit;
-        const countryId = await promptAsync('Введите ID вашей страны');
-        if(!countryId) return;
-        const r = await apiPost('buy_unit',{ countryId, unit });
-        if(r.ok){ alert('Юнит куплен'); await loadCountries(); } else alert('Ошибка: '+(r.message||'unknown'));
-      }
-      if(action==='declare-war'){
-        const target = await promptAsync('ID страны для войны:');
-        if(!target) return;
-        const attacker = await promptAsync('Ваш ID страны:');
-        if(!attacker) return;
-        const res = await apiPost('declare_war',{ attackerId: attacker, defenderId: target });
-        if(res.ok){ alert('Война объявлена'); await loadCountries(); } else alert('Ошибка: '+(res.message||'unknown'));
-      }
-      if(action==='attack'){
-        const attacker = await promptAsync('Ваш ID страны:');
-        const target = await promptAsync('ID страны для атаки:');
-        if(!attacker || !target) return;
-        const res = await apiPost('attack',{ attackerId: attacker, defenderId: target });
-        if(res.ok) alert('Атака выполнена. Потери: ' + (res.lost||0)); else alert('Ошибка: ' + (res.message||'unknown'));
-      }
+      if(action==='build-econ'){ await buildBuildingFlow(); return; }
     });
   });
 }
 
-// =================== ADMIN ===================
+// =================== BIND ADMIN BUTTONS ===================
 function bindAdminButtons(){
   document.querySelectorAll('#admin-panel [data-admin]').forEach(btn=>{
     btn.addEventListener('click', async ()=>{
       if(!USER) return alert('Войдите!');
       const action = btn.getAttribute('data-admin');
-      if(action==='create-country' && USER.role==='owner') return await createCountryFlow();
-      if(action==='assign-owner' && USER.role==='owner') return await assignOwnerFlow();
-      if(action==='toggle-economy' && (USER.role==='admin'||USER.role==='owner')) return await toggleEconomyFlow();
-      if(action==='give-points' && (USER.role==='admin'||USER.role==='owner')) return await givePointsFlow();
-      if(action==='view-logs' && (USER.role==='admin'||USER.role==='owner')) return await viewLogsFlow();
+      if(action==='create-country' && (USER.role==='owner' || USER.role==='admin')) return await createCountryFlow();
+      if(action==='view-logs' && (USER.role==='owner' || USER.role==='admin')) return await viewLogsFlow();
       alert('Нет прав или неизвестная операция');
     });
   });
 }
 
-// =================== AUTH ===================
+// =================== AUTH HANDLERS ===================
 function bindAuthHandlers(){
   const dlgAuth = $('dlg-auth');
   const btnRegister = $('btn-register');
@@ -240,9 +229,9 @@ function bindAuthHandlers(){
       const login = $('auth-username')?.value?.trim();
       const pass  = $('auth-password')?.value?.trim();
       if(!login || !pass) return alert('Введите логин и пароль');
-      const r = await apiAuth('register',{ login, password: pass });
-      if(r.ok){ TOKEN=r.token; localStorage.setItem('token',TOKEN); USER=r.user; if(dlgAuth) dlgAuth.close(); await checkSession(); await loadCountries(); }
-      else alert(r.message||'Ошибка');
+      const r = await apiAuth('register', { login, password: pass });
+      if(r.ok){ TOKEN = r.token; localStorage.setItem('token', TOKEN); USER = r.user; if(dlgAuth) dlgAuth.close(); await checkSession(); await loadCountries(); }
+      else alert(r.message || 'Ошибка');
     });
   }
 
@@ -252,9 +241,9 @@ function bindAuthHandlers(){
       const login = $('auth-username')?.value?.trim();
       const pass  = $('auth-password')?.value?.trim();
       if(!login || !pass) return alert('Введите логин и пароль');
-      const r = await apiAuth('login',{ login, password: pass });
-      if(r.ok){ TOKEN=r.token; localStorage.setItem('token',TOKEN); USER=r.user; if(dlgAuth) dlgAuth.close(); await checkSession(); await loadCountries(); }
-      else alert(r.message||'Ошибка');
+      const r = await apiAuth('login', { login, password: pass });
+      if(r.ok){ TOKEN = r.token; localStorage.setItem('token', TOKEN); USER = r.user; if(dlgAuth) dlgAuth.close(); await checkSession(); await loadCountries(); }
+      else alert(r.message || 'Ошибка');
     });
   }
 }
@@ -266,10 +255,9 @@ document.addEventListener('DOMContentLoaded', async ()=>{
   bindAuthHandlers();
 
   $('btn-logout')?.addEventListener('click', async ()=>{
-    TOKEN=''; USER=null; localStorage.removeItem('token'); await checkSession();
+    TOKEN=''; USER=null; localStorage.removeItem('token');
+    await checkSession();
   });
-
-  document.querySelectorAll('[data-action="admin-open"]').forEach(b=> b.addEventListener('click', ()=>show($('admin-panel')) ));
 
   await checkSession();
   await loadCountries();
