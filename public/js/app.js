@@ -3,7 +3,6 @@ const API = 'https://web-strategy-hoi4.onrender.com/api';
 let TOKEN = localStorage.getItem('token') || '';
 let USER = null;
 let COUNTRIES = [];
-let AVAILABLE_FLAGS = [];
 
 // =================== HELPERS ===================
 const $ = id => document.getElementById(id);
@@ -17,6 +16,7 @@ function buildHeaders(json = true){
   return h;
 }
 
+// =================== AUTH ===================
 async function apiAuth(op, data){
   try{
     const res = await fetch(`${API}/auth`, {
@@ -39,7 +39,7 @@ async function apiPost(op, data){
   }catch(e){ return { ok:false, message: e.message }; }
 }
 
-// =================== SESSION ===================
+// =================== SESSION / UI ===================
 async function checkSession(){
   if(!TOKEN){
     USER = null;
@@ -68,30 +68,27 @@ async function loadCountries(){
   try{
     const res = await fetch(`${API}/countries`, { headers: buildHeaders(false) });
     const data = await res.json();
-    if(!data || data.ok === false){ console.warn('countries:', data.message); return; }
+    if(data && data.ok === false){ console.warn('countries:', data.message); return; }
     COUNTRIES = Object.values(data || {});
     updatePoints();
+    console.log('Countries loaded:', COUNTRIES);
   }catch(e){ console.error(e); }
 }
 
 function updatePoints(){
   let total = 0;
-  COUNTRIES.forEach(c => { total += c.points || 0; });
+  Object.values(COUNTRIES).forEach(c => { total += c.points || 0; });
   const p = $('points');
   if(p) p.textContent = 'Очки: ' + total;
 }
 
-// =================== PROMPT ===================
+// =================== PROMPT HELPER ===================
 function promptAsync(message){
   return new Promise(resolve => {
     const input = $('prompt-input');
     const dlg = $('dlg-prompt');
     const title = $('prompt-title');
-    if(!input || !dlg || !title){
-      const val = window.prompt(message);
-      resolve(val ? val.trim() : '');
-      return;
-    }
+    if(!input || !dlg || !title) { const val = window.prompt(message); resolve(val ? val.trim() : ''); return; }
     title.textContent = message;
     input.value = '';
     dlg.showModal();
@@ -106,40 +103,35 @@ function promptAsync(message){
   });
 }
 
-// =================== ADMIN FLOWS ===================
-async function fetchFlags(){
-  try{
-    const res = await fetch(`${API}/flags`, { headers: buildHeaders(false) });
-    const data = await res.json();
-    if(Array.isArray(data)) AVAILABLE_FLAGS = data;
-  }catch(e){ console.error('Не удалось получить флаги:', e); }
-}
-
+// =================== FLOWS ===================
 async function createCountryFlow(){
-  await fetchFlags();
-  const name = await promptAsync("Введите название страны (1-256 букв/цифр/пробелов)");
-  if(!name || !name.match(/^[a-zA-Zа-яА-Я0-9\s]{1,256}$/)) return alert("Некорректное название!");
+  const flagsFolder = '/flags'; // отдельно от img
+  const flagListRes = await fetch(flagsFolder);
+  let availableFlags = ['flag_chern','flag_blue','flag_red']; // fallback
+  try{
+    const text = await flagListRes.text();
+    const matches = text.match(/href="([^"]+\.(png|jpg|jpeg))"/gi);
+    if(matches) availableFlags = matches.map(m => m.replace(/href="|"/g,'').replace(/\.(png|jpg|jpeg)$/i,''));
+  }catch(e){ console.warn('Cannot load flags folder, fallback used'); }
 
-  const flag = await promptAsync("Введите название флага (доступные: " + AVAILABLE_FLAGS.join(', ') + ")");
-  if(!flag || !AVAILABLE_FLAGS.includes(flag)) return alert("Такого флага нет!");
+  const name = await promptAsync("Введите название страны (только буквы и цифры, макс 256)");
+  if(!name || !name.trim().match(/^[a-zA-Zа-яА-Я0-9\s]{1,256}$/)) return alert("Некорректное название!");
 
-  alert("Кликните по карте для установки позиции страны");
+  const flag = await promptAsync("Введите название флага (доступные: " + availableFlags.join(', ') + ")");
+  if(!flag || !availableFlags.includes(flag)) return alert("Такого флага нет!");
 
-  const mapObj = $('map');
-  if(!mapObj) return alert('Элемент карты не найден');
+  alert("Теперь кликните по карте для установки позиции страны");
+  const mapObj = $('map'); if(!mapObj) return alert('Элемент карты не найден');
 
-  const svgDoc = mapObj.contentDocument || mapObj.getSVGDocument();
-  if(!svgDoc) return alert('SVG не загружен или клик по объекту невозможен');
-
-  return new Promise(resolve => {
-    const handler = async e => {
+  return new Promise(resolve=>{
+    const handler = async e=>{
       const rect = mapObj.getBoundingClientRect();
       const x = Math.round(e.clientX - rect.left);
       const y = Math.round(e.clientY - rect.top);
       mapObj.removeEventListener('click', handler);
-      const res = await apiPost('create_country', { name, flag, x, y });
+      const res = await apiPost('create_country', { name:name.trim(), flag, x, y });
       if(res.ok){ alert('Страна создана'); await loadCountries(); }
-      else alert('Ошибка: ' + (res.message || 'unknown'));
+      else alert('Ошибка: ' + (res.message||'unknown'));
       resolve();
     };
     mapObj.addEventListener('click', handler);
@@ -153,47 +145,41 @@ async function assignOwnerFlow(){
   if(!login) return;
   const res = await apiPost('assign_owner', { countryId: id, login });
   if(res.ok) { alert('Владелец назначен'); await loadCountries(); }
-  else alert('Ошибка: ' + (res.message || 'unknown'));
+  else alert('Ошибка: ' + (res.message||'unknown'));
 }
 
 async function toggleEconomyFlow(){
   const res = await apiPost('toggle_economy', {});
   if(res.ok) alert('Экономика теперь: ' + (res.value ? 'Включена' : 'Выключена'));
-  else alert('Ошибка: ' + (res.message || 'unknown'));
+  else alert('Ошибка: ' + (res.message||'unknown'));
 }
 
 async function givePointsFlow(){
-  if(USER.role !== 'admin') return alert('Нет прав');
+  if(USER.role !== 'admin' && USER.role !== 'owner') return alert('Нет прав');
   const id = await promptAsync("Введите ID страны");
   const amount = await promptAsync("Введите количество очков");
   if(isNaN(amount) || amount.trim()==='') return alert("Только число!");
   const res = await apiPost('give_points', { countryId: id, amount });
   if(res.ok) { alert('Очки выданы'); await loadCountries(); }
-  else alert('Ошибка: ' + (res.message || 'unknown'));
+  else alert('Ошибка: ' + (res.message||'unknown'));
 }
 
 async function viewLogsFlow(){
   try{
-    const res = await fetch(`${API}/logs`, { headers: buildHeaders(true) });
+    const res = await fetch(`${API}/logs`, { headers: buildHeaders(false) });
     const text = await res.text();
-    try{
-      const data = JSON.parse(text);
-      if(Array.isArray(data) && data.length) $('logs-view').textContent = data.map(l => `${l.timestamp} ${l.user} ${l.action}`).join('\n');
-      else $('logs-view').textContent = "Логи пусты";
-    }catch{
-      $('logs-view').textContent = text || "Ошибка при получении логов";
-    }
+    const pre = $('logs-view');
+    if(pre) pre.textContent = text.startsWith('<') ? text : JSON.stringify(JSON.parse(text), null, 2);
     const dlg = $('dlg-logs'); if(dlg) dlg.showModal();
   }catch(e){ alert('Ошибка: ' + e.message); }
 }
 
-// =================== ACTIONS ===================
+// =================== BUTTON BINDINGS ===================
 function bindActionButtons(){
   document.querySelectorAll('#actions .btn').forEach(btn=>{
     btn.addEventListener('click', async ()=>{
-      if(!USER){ alert('Сначала войдите'); return; }
+      if(!USER) { alert('Сначала войдите'); return; }
       const action = btn.dataset.action;
-
       if(action === 'admin-open'){ show($('admin-panel')); return; }
       if(action === 'economy-spend'){ await apiPost('toggle_economy', {}); await loadCountries(); }
       if(action === 'buy-unit'){
@@ -201,15 +187,13 @@ function bindActionButtons(){
         const countryId = await promptAsync('Введите ID вашей страны');
         if(!countryId) return;
         const r = await apiPost('buy_unit', { countryId, unit });
-        if(r.ok){ alert('Юнит куплен'); await loadCountries(); } else alert('Ошибка: ' + (r.message||'unknown'));
+        if(r.ok) { alert('Юнит куплен'); await loadCountries(); } else alert('Ошибка: ' + (r.message||'unknown'));
       }
       if(action === 'declare-war'){
         const target = await promptAsync('ID страны для войны:');
         if(!target) return;
-        const attacker = await promptAsync('Ваш ID страны:');
-        if(!attacker) return;
-        const res = await apiPost('declare_war', { attackerId: attacker, defenderId: target });
-        if(res.ok){ alert('Война объявлена'); await loadCountries(); } else alert('Ошибка: ' + (res.message||'unknown'));
+        const res = await apiPost('declare_war', { attackerId: await promptAsync('Ваш ID страны:'), defenderId: target });
+        if(res.ok) { alert('Война объявлена'); await loadCountries(); } else alert('Ошибка: ' + (res.message||'unknown'));
       }
       if(action === 'attack'){
         const attacker = await promptAsync('Ваш ID страны:');
@@ -230,14 +214,13 @@ function bindAdminButtons(){
       if(action === 'create-country' && USER.role === 'owner') return await createCountryFlow();
       if(action === 'assign-owner' && USER.role === 'owner') return await assignOwnerFlow();
       if(action === 'toggle-economy' && (USER.role === 'admin' || USER.role === 'owner')) return await toggleEconomyFlow();
-      if(action === 'give-points') return await givePointsFlow();
-      if(action === 'view-logs') return await viewLogsFlow();
+      if(action === 'give-points' && (USER.role === 'admin' || USER.role === 'owner')) return await givePointsFlow();
+      if(action === 'view-logs' && (USER.role === 'admin' || USER.role === 'owner')) return await viewLogsFlow();
       alert('Нет прав или неизвестная операция');
     });
   });
 }
 
-// =================== AUTH ===================
 function bindAuthHandlers(){
   const dlgAuth = $('dlg-auth');
   const btnRegister = $('btn-register');
