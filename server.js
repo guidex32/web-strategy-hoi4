@@ -1,133 +1,135 @@
 const express = require('express');
-const mysql = require('mysql2/promise');
-const bcrypt = require('bcrypt');
-const jwt = require('jsonwebtoken');
 const cors = require('cors');
+const mysql = require('mysql2/promise');
+const bodyParser = require('body-parser');
+const path = require('path');
+const jwt = require('jsonwebtoken');
 
 const app = express();
+const PORT = process.env.PORT || 3000;
+
+const dbConfig = {
+  host: '51.38.13.75',
+  user: 'gs10071',
+  password: 'fCEJNemIUB',
+  database: 'gs10071',
+  port: 3306,
+};
+
+let pool;
+(async () => { pool = await mysql.createPool(dbConfig); console.log('DB pool ready'); })();
+
 app.use(cors());
-app.use(express.json());
+app.use(bodyParser.json());
+app.use(express.static(path.join(__dirname,'public')));
 
-const SECRET = 'supersecret'; // поменяй для безопасности
+const SECRET = 'supersecretkey123';
 
-// подключение к MySQL
-const pool = mysql.createPool({
-  host: 'localhost',
-  user: 'root',
-  password: '',
-  database: 'strategy',
-  waitForConnections: true,
-  connectionLimit: 10,
-  queueLimit: 0
-});
-
-// middleware для проверки токена
-function verifyToken(req, res, next) {
-  const token = req.headers['authorization'];
-  if (!token) return res.status(403).json({ ok: false, message: 'Нет токена' });
-  try {
-    const decoded = jwt.verify(token, SECRET);
-    req.user = decoded;
+// Middleware для защищённых эндпоинтов
+async function verifyToken(req,res,next){
+  const header = req.headers['authorization'];
+  if(!header) return res.status(401).json({ok:false,message:'No token'});
+  const token = header.split(' ')[1];
+  try{
+    req.user = jwt.verify(token,SECRET);
     next();
-  } catch (err) {
-    return res.status(401).json({ ok: false, message: 'Неверный токен' });
-  }
+  }catch(e){ res.status(401).json({ok:false,message:'Invalid token'}); }
 }
 
-// регистрация
-app.post('/register', async (req, res) => {
-  const { login, password } = req.body;
-  if (!login || !password) return res.json({ ok: false, message: 'Заполните все поля' });
-  const hash = await bcrypt.hash(password, 10);
+// --- Auth ---
+app.post('/api/auth', async (req,res)=>{
+  const {op, login, password} = req.body;
+  try{
+    if(op==='register'){
+      const [rows] = await pool.query('SELECT * FROM users WHERE login=?',[login]);
+      if(rows.length) return res.json({ok:false,message:'Логин занят'});
+      await pool.query('INSERT INTO users(login,password,role) VALUES(?,?,?)',[login,password,'player']);
+      const [newUser] = await pool.query('SELECT * FROM users WHERE login=?',[login]);
+      const token = jwt.sign({id:newUser[0].id,login:newUser[0].login,role:newUser[0].role},SECRET);
+      return res.json({ok:true,token,user:newUser[0]});
+    }
 
-  try {
-    const [rows] = await pool.query('SELECT * FROM users WHERE login=?', [login]);
-    if (rows.length > 0) return res.json({ ok: false, message: 'Логин занят' });
+    if(op==='login'){
+      const [rows] = await pool.query('SELECT * FROM users WHERE login=? AND password=?',[login,password]);
+      if(rows.length===0) return res.json({ok:false,message:'Неверный логин или пароль'});
+      const user = rows[0];
+      const token = jwt.sign({id:user.id,login:user.login,role:user.role},SECRET);
+      return res.json({ok:true,token,user});
+    }
 
-    await pool.query('INSERT INTO users(login, password, role) VALUES(?,?,?)', [login, hash, 'user']);
-    res.json({ ok: true });
-  } catch (e) {
-    res.json({ ok: false, message: e.message });
-  }
+    if(op==='session'){
+      const header = req.headers['authorization'];
+      if(!header) return res.json({ok:false,message:'No token'});
+      try{
+        const decoded = jwt.verify(header.split(' ')[1],SECRET);
+        return res.json({ok:true,user:decoded});
+      }catch(e){ return res.json({ok:false,message:'Invalid token'}); }
+    }
+
+    res.json({ok:false,message:'Неизвестная операция'});
+  }catch(e){ console.error('AUTH ERROR',e); res.json({ok:false,message:e.message}); }
 });
 
-// вход
-app.post('/login', async (req, res) => {
-  const { login, password } = req.body;
-  try {
-    const [rows] = await pool.query('SELECT * FROM users WHERE login=?', [login]);
-    if (rows.length === 0) return res.json({ ok: false, message: 'Пользователь не найден' });
-
-    const user = rows[0];
-    const match = await bcrypt.compare(password, user.password);
-    if (!match) return res.json({ ok: false, message: 'Неверный пароль' });
-
-    const token = jwt.sign({ id: user.id, login: user.login, role: user.role }, SECRET, { expiresIn: '7d' });
-    res.json({ ok: true, token });
-  } catch (e) {
-    res.json({ ok: false, message: e.message });
-  }
+// --- Countries ---
+app.get('/api/countries', verifyToken, async (req,res)=>{
+  try{
+    const [rows] = await pool.query('SELECT * FROM countries');
+    const countries = {};
+    rows.forEach(c=>{
+      countries[c.id] = {
+        id:c.id,
+        name:c.name,
+        owner:c.owner,
+        economy:c.economy,
+        army:JSON.parse(c.army||'{}'),
+        status:c.status,
+        points:c.points,
+        x:c.x||0,
+        y:c.y||0,
+        flag:c.flag||'default.png'
+      }
+    });
+    res.json(countries);
+  }catch(e){ res.json({ok:false,message:e.message}); }
 });
 
-// API для карты и админки
-app.post('/api', verifyToken, async (req, res) => {
-  const { op } = req.body;
-
-  try {
-    // переключение экономики
-    if (op === 'toggle_economy') {
-      const [rows] = await pool.query('SELECT * FROM countries WHERE owner=?', [req.user.id]);
-      if (rows.length === 0) return res.json({ ok: false, message: 'Страна не найдена' });
-
-      const country = rows[0];
-      const newVal = country.economy ? 0 : 1;
-      await pool.query('UPDATE countries SET economy=? WHERE id=?', [newVal, country.id]);
-      return res.json({ ok: true, value: newVal });
+// --- Admin Actions ---
+app.post('/api', verifyToken, async (req,res)=>{
+  const {op,countryId,login,name,x,y,flag} = req.body;
+  try{
+    if(op==='create_country' && req.user.role==='owner'){
+      if(!name||name.length>256||/[0-9]/.test(name)) return res.json({ok:false,message:'Неправильное название'});
+      await pool.query('INSERT INTO countries(name,economy,army,status,points,x,y,owner,flag) VALUES(?,?,?,?,?,?,?,?,?)',[name,0,'{}','peace',0,x,y,req.user.login,flag]);
+      return res.json({ok:true});
     }
 
-    // создать страну
-    if (op === 'create_country') {
-      const { name, flag, x, y } = req.body;
-      const [result] = await pool.query(
-        'INSERT INTO countries(name,flag,owner,x,y,economy,points) VALUES(?,?,?,?,?,?,?)',
-        [name, flag, req.user.id, x, y, 1, 0]
-      );
-      return res.json({ ok: true, id: result.insertId });
+    if(op==='assign_owner' && req.user.role==='owner'){
+      const [crows] = await pool.query('SELECT * FROM countries WHERE id=?',[countryId]);
+      if(crows.length===0) return res.json({ok:false,message:'Страна не найдена'});
+      const [urows] = await pool.query('SELECT * FROM users WHERE login=?',[login]);
+      if(urows.length===0) return res.json({ok:false,message:'Пользователь не найден'});
+      await pool.query('UPDATE countries SET owner=? WHERE id=?',[login,countryId]);
+      return res.json({ok:true});
     }
 
-    // назначить владельца
-    if (op === 'assign_owner') {
-      if (req.user.role !== 'admin') return res.json({ ok: false, message: 'Нет прав' });
-
-      const { countryId, login } = req.body;
-      const [rows] = await pool.query('SELECT * FROM countries WHERE id=?', [countryId]);
-      if (rows.length === 0) return res.json({ ok: false, message: 'Страна не найдена' });
-
-      const [users] = await pool.query('SELECT * FROM users WHERE login=?', [login]);
-      if (users.length === 0) return res.json({ ok: false, message: 'Пользователь не найден' });
-
-      await pool.query('UPDATE countries SET owner=? WHERE id=?', [users[0].id, countryId]);
-      return res.json({ ok: true });
+    if(op==='toggle_economy' && (req.user.role==='owner'||req.user.role==='admin')){
+      const [rows] = await pool.query('SELECT value FROM settings WHERE name="economy"');
+      let val = rows.length?rows[0].value==='1':true;
+      val = !val;
+      await pool.query('INSERT INTO settings(name,value) VALUES("economy",?) ON DUPLICATE KEY UPDATE value=?',[val?1:0,val?1:0]);
+      return res.json({ok:true,value:val});
     }
 
-    // выдать очки
-    if (op === 'give_points') {
-      if (req.user.role !== 'admin') return res.json({ ok: false, message: 'Нет прав' });
-
-      const { countryId, amount } = req.body;
-      const [rows] = await pool.query('SELECT * FROM countries WHERE id=?', [countryId]);
-      if (rows.length === 0) return res.json({ ok: false, message: 'Страна не найдена' });
-
-      const newPoints = rows[0].points + Number(amount);
-      await pool.query('UPDATE countries SET points=? WHERE id=?', [newPoints, countryId]);
-      return res.json({ ok: true });
+    if(op==='view_logs' && req.user.role==='admin'){
+      const [logs] = await pool.query('SELECT * FROM logs ORDER BY timestamp DESC');
+      return res.json({ok:true,logs});
     }
 
-    return res.json({ ok: false, message: 'Неизвестная операция' });
-  } catch (e) {
-    res.json({ ok: false, message: e.message });
-  }
+    res.json({ok:false,message:'Неизвестная операция или нет прав'});
+  }catch(e){ res.json({ok:false,message:e.message}); }
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server started on port ${PORT}`));
+// --- Front ---
+app.get('*',(req,res)=>{ res.sendFile(path.join(__dirname,'public','index.html')); });
+
+app.listen(PORT,()=>console.log('Server running on port '+PORT));
