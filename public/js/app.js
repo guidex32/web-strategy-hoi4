@@ -1,4 +1,4 @@
-// app.js (исправленный)
+// =================== CONFIG ===================
 const API = 'https://web-strategy-hoi4.onrender.com/api';
 let TOKEN = localStorage.getItem('token') || '';
 let USER = null;
@@ -66,9 +66,9 @@ async function checkSession(){
 async function loadCountries(){
   if(!TOKEN) return;
   try{
-    const res = await fetch(`${API}/countries`, { headers: buildHeaders(false) });
+    const res = await fetch(`${API}/countries`, { headers: buildHeaders(true) });
+    if(!res.ok) throw new Error('Ошибка загрузки стран');
     const data = await res.json();
-    if(data && data.ok === false){ console.warn('countries:', data.message); return; }
     COUNTRIES = Object.values(data || {});
     updatePoints();
     console.log('Countries loaded:', COUNTRIES);
@@ -111,10 +111,10 @@ function promptAsync(message){
 // --- flows ---
 async function createCountryFlow(){
   const availableFlags = ['flag_chern','flag_blue','flag_red'];
-  const name = await promptAsync("Введите название страны (только буквы, максимум 256)");
-  if(!name || !name.match(/^[a-zA-Zа-яА-Я\s]{1,256}$/)) return alert("Некорректное название!");
+  const name = await promptAsync("Введите название страны (буквы, цифры, пробел, максимум 256)");
+  if(!name || !name.match(/^[\wа-яА-Я\s]{1,256}$/)) return alert("Некорректное название!");
 
-  const flag = await promptAsync("Введите название флага (доступные: " + availableFlags.join(', ') + ")\nТолько имя, без .png/.jpg");
+  const flag = await promptAsync("Введите название флага (доступные: " + availableFlags.join(', ') + ")");
   if(!flag || !availableFlags.includes(flag)) return alert("Такого флага нет!");
 
   alert("Теперь кликните по карте для установки позиции страны");
@@ -163,24 +163,18 @@ async function givePointsFlow(){
   else alert('Ошибка: ' + (res.message || 'unknown'));
 }
 
-// --- view logs fixed ---
 async function viewLogsFlow(){
-  if(!USER || !TOKEN) return alert('Сначала войдите');
   try{
     const res = await fetch(`${API}/logs`, { headers: buildHeaders(true) });
+    if(!res.ok) throw new Error('Нет доступа к логам');
     const data = await res.json();
     if(Array.isArray(data) && data.length) {
-      $('logs-view').textContent = data.map(
-        l => `[${l.timestamp}] ${l.user} (${l.role || '—'}) — ${l.action}`
-      ).join('\n');
+      $('logs-view').textContent = data.map(l => `[${l.timestamp}] ${l.user} (${l.role}) — ${l.action}`).join('\n');
     } else {
-      $('logs-view').textContent = "Логи пусты или нет доступа";
+      $('logs-view').textContent = "Логи пусты";
     }
-    const dlg = $('dlg-logs'); 
-    if(dlg) dlg.showModal();
-  }catch(e){ 
-    alert('Ошибка: ' + e.message); 
-  }
+    const dlg = $('dlg-logs'); if(dlg) dlg.showModal();
+  }catch(e){ alert('Ошибка: ' + e.message); }
 }
 
 // --- actions buttons ---
@@ -190,7 +184,7 @@ function bindActionButtons(){
       if(!USER) { alert('Сначала войдите'); return; }
       const action = btn.dataset.action;
       if(action === 'admin-open'){ show($('admin-panel')); return; }
-      if(!COUNTRIES || COUNTRIES.length === 0 && action !== 'admin-open') {}
+
       if(action === 'economy-spend'){
         await apiPost('toggle_economy', {});
         await loadCountries();
@@ -205,7 +199,9 @@ function bindActionButtons(){
       if(action === 'declare-war'){
         const target = await promptAsync('ID страны для войны:');
         if(!target) return;
-        const res = await apiPost('declare_war', { attackerId: await promptAsync('Ваш ID страны:'), defenderId: target });
+        const attacker = await promptAsync('Ваш ID страны:');
+        if(!attacker) return;
+        const res = await apiPost('declare_war', { attackerId: attacker, defenderId: target });
         if(res.ok) { alert('Война объявлена'); await loadCountries(); } else alert('Ошибка: ' + (res.message||'unknown'));
       }
       if(action === 'attack'){
@@ -225,11 +221,13 @@ function bindAdminButtons(){
     btn.addEventListener('click', async ()=>{
       if(!USER) return alert('Войдите!');
       const action = btn.getAttribute('data-admin');
+
       if(action === 'create-country' && USER.role === 'owner') return await createCountryFlow();
       if(action === 'assign-owner' && USER.role === 'owner') return await assignOwnerFlow();
       if(action === 'toggle-economy' && (USER.role === 'admin' || USER.role === 'owner')) return await toggleEconomyFlow();
-      if(action === 'give-points' && USER.role === 'admin') return await givePointsFlow();
+      if(action === 'give-points' && (USER.role === 'admin')) return await givePointsFlow();
       if(action === 'view-logs' && (USER.role === 'admin' || USER.role === 'owner')) return await viewLogsFlow();
+
       alert('Нет прав или неизвестная операция');
     });
   });
