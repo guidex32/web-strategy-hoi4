@@ -1,4 +1,4 @@
-// server.js (исправленный)
+// server.js (ПФ)
 const express = require('express');
 const cors = require('cors');
 const mysql = require('mysql2/promise');
@@ -33,8 +33,12 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// --- Helper ---
+// healthcheck
+app.get('/test', (_req, res) => res.json({ ok: true, msg: 'Server is alive' }));
+
 const SECRET = 'supersecretkey123';
+
+// helper: read bearer
 function readBearer(req) {
   const h = req.headers['authorization'];
   if (!h) return null;
@@ -42,20 +46,17 @@ function readBearer(req) {
   return parts.length === 2 ? parts[1] : null;
 }
 
-// verify token middleware (не кидает HTML, всегда JSON)
+// verify token middleware
 async function verifyToken(req, res, next) {
   const token = readBearer(req);
-  if (!token) {
-    req.user = null;
-    return next();
-  }
+  if (!token) return res.status(401).json({ ok: false, message: 'No token' });
   try {
     const decoded = jwt.verify(token, SECRET);
-    req.user = decoded;
-  } catch {
-    req.user = null;
+    req.user = decoded; // {id, login, role}
+    next();
+  } catch (e) {
+    return res.status(401).json({ ok: false, message: 'Invalid token' });
   }
-  next();
 }
 
 // --- AUTH ---
@@ -69,6 +70,8 @@ app.post('/api/auth', async (req, res) => {
       const [newUserRows] = await pool.query('SELECT * FROM users WHERE login=?', [login]);
       const u = newUserRows[0];
       const token = jwt.sign({ id: u.id, login: u.login, role: u.role }, SECRET, { expiresIn: '7d' });
+      // логируем регистрацию
+      await pool.query('INSERT INTO logs(user,action,timestamp) VALUES(?,?,NOW())',[u.login,'Зарегистрировался']);
       return res.json({ ok: true, token, user: { id: u.id, login: u.login, role: u.role } });
     }
 
@@ -77,6 +80,8 @@ app.post('/api/auth', async (req, res) => {
       if (rows.length === 0) return res.json({ ok: false, message: 'Неверный логин или пароль' });
       const u = rows[0];
       const token = jwt.sign({ id: u.id, login: u.login, role: u.role }, SECRET, { expiresIn: '7d' });
+      // логируем успешную авторизацию
+      await pool.query('INSERT INTO logs(user,action,timestamp) VALUES(?,?,NOW())',[u.login,`Авторизовался (роль: ${u.role})`]);
       return res.json({ ok: true, token, user: { id: u.id, login: u.login, role: u.role } });
     }
 
@@ -94,13 +99,12 @@ app.post('/api/auth', async (req, res) => {
     return res.json({ ok: false, message: 'Неизвестная операция' });
   } catch (e) {
     console.error('[AUTH] error:', e);
-    return res.json({ ok: false, message: e.message });
+    return res.status(500).json({ ok: false, message: e.message });
   }
 });
 
 // --- Countries ---
-app.get('/api/countries', verifyToken, async (req, res) => {
-  if (!req.user) return res.json({ ok: false, message: 'No token' });
+app.get('/api/countries', verifyToken, async (_req, res) => {
   try {
     const [rows] = await pool.query('SELECT * FROM countries');
     const countries = {};
@@ -120,107 +124,122 @@ app.get('/api/countries', verifyToken, async (req, res) => {
     res.json(countries);
   } catch (e) {
     console.error('[COUNTRIES] error:', e);
-    res.json({ ok: false, message: e.message });
+    res.status(500).json({ ok: false, message: e.message });
   }
 });
 
 // --- Actions ---
 let ECONOMY_ON = true;
+
 app.post('/api', verifyToken, async (req, res) => {
-  if (!req.user) return res.json({ ok: false, message: 'No token' });
   const { op } = req.body || {};
   try {
     if (op === 'toggle_economy') {
-      if (!['admin','owner'].includes(req.user.role)) return res.json({ ok:false,message:'Нет прав' });
       ECONOMY_ON = !ECONOMY_ON;
-      return res.json({ ok:true, value: ECONOMY_ON });
+      await pool.query('INSERT INTO logs(user,action,timestamp) VALUES(?,?,NOW())',[req.user.login,`Переключил экономику: ${ECONOMY_ON}`]);
+      return res.json({ ok: true, value: ECONOMY_ON });
     }
 
     if (op === 'buy_unit') {
       const { countryId, unit } = req.body;
       const [rows] = await pool.query('SELECT * FROM countries WHERE id=?', [countryId]);
-      if (rows.length === 0) return res.json({ ok:false,message:'Страна не найдена' });
+      if (rows.length === 0) return res.json({ ok: false, message: 'Страна не найдена' });
       const country = rows[0];
       const army = Object.assign({}, JSON.parse(country.army || '{}'));
-      army[unit] = (army[unit]||0)+1;
-      await pool.query('UPDATE countries SET army=? WHERE id=?',[JSON.stringify(army),countryId]);
-      return res.json({ok:true});
+      army[unit] = (army[unit] || 0) + 1;
+      await pool.query('UPDATE countries SET army=? WHERE id=?', [JSON.stringify(army), countryId]);
+      await pool.query('INSERT INTO logs(user,action,timestamp) VALUES(?,?,NOW())',[req.user.login,`Купил юнит ${unit} для страны ${country.name}`]);
+      return res.json({ ok: true });
     }
 
     if (op === 'declare_war') {
       const { defenderId } = req.body;
-      const [rows] = await pool.query('SELECT * FROM countries WHERE id=?',[defenderId]);
-      if (rows.length === 0) return res.json({ok:false,message:'Страна не найдена'});
-      await pool.query('UPDATE countries SET status=? WHERE id=?',['war',defenderId]);
-      return res.json({ok:true});
+      const [rows] = await pool.query('SELECT * FROM countries WHERE id=?', [defenderId]);
+      if (rows.length === 0) return res.json({ ok: false, message: 'Страна не найдена' });
+      await pool.query('UPDATE countries SET status=? WHERE id=?', ['war', defenderId]);
+      await pool.query('INSERT INTO logs(user,action,timestamp) VALUES(?,?,NOW())',[req.user.login,`Объявил войну стране ${rows[0].name}`]);
+      return res.json({ ok: true });
     }
 
     if (op === 'attack') {
       const { defenderId } = req.body;
-      const [rows] = await pool.query('SELECT * FROM countries WHERE id=?',[defenderId]);
-      if (rows.length === 0) return res.json({ok:false,message:'Страна не найдена'});
-      const points = Math.max((rows[0].points||0)-10,0);
-      await pool.query('UPDATE countries SET points=? WHERE id=?',[points,defenderId]);
-      return res.json({ok:true,lost:10});
+      const [rows] = await pool.query('SELECT * FROM countries WHERE id=?', [defenderId]);
+      if (rows.length === 0) return res.json({ ok: false, message: 'Страна не найдена' });
+      const points = Math.max((rows[0].points || 0) - 10, 0);
+      await pool.query('UPDATE countries SET points=? WHERE id=?', [points, defenderId]);
+      await pool.query('INSERT INTO logs(user,action,timestamp) VALUES(?,?,NOW())',[req.user.login,`Атаковал страну ${rows[0].name}, потеряно очков 10`]);
+      return res.json({ ok: true, lost: 10 });
     }
 
     if (op === 'create_country') {
-      if (!['owner','admin'].includes(req.user.role)) return res.json({ok:false,message:'Нет прав'});
+      if (!['owner','admin'].includes(req.user.role)) return res.json({ ok: false, message: 'Нет прав' });
       const { name, flag, x, y } = req.body;
-      if (!name || /[0-9]/.test(name) || name.length>256) return res.json({ok:false,message:'Некорректное название'});
+      if (!name || /[0-9]/.test(name) || name.length > 256) {
+        return res.json({ ok: false, message: 'Некорректное название' });
+      }
       await pool.query(
-        'INSERT INTO countries(name,flag,owner,economy,army,status,points,x,y) VALUES(?,?,?,?,?,?,?,?,?)',
-        [name,flag||'',req.user.login,0,'{}','peace',0,x||0,y||0]
+        'INSERT INTO countries(name, flag, owner, economy, army, status, points, x, y) VALUES(?,?,?,?,?,?,?,?,?)',
+        [name, flag || '', req.user.login, 0, '{}', 'peace', 0, x || 0, y || 0]
       );
-      return res.json({ok:true});
+      await pool.query('INSERT INTO logs(user,action,timestamp) VALUES(?,?,NOW())',[req.user.login,`Создана страна ${name} с флагом ${flag}`]);
+      return res.json({ ok: true });
     }
 
     if (op === 'assign_owner') {
-      if (!['owner','admin'].includes(req.user.role)) return res.json({ok:false,message:'Нет прав'});
+      if (!['owner','admin'].includes(req.user.role)) return res.json({ ok: false, message: 'Нет прав' });
       const { countryId, login } = req.body;
-      const [crow] = await pool.query('SELECT * FROM countries WHERE id=?',[countryId]);
-      if (crow.length===0) return res.json({ok:false,message:'Страна не найдена'});
-      const [urow] = await pool.query('SELECT * FROM users WHERE login=?',[login]);
-      if (urow.length===0) return res.json({ok:false,message:'Пользователь не найден'});
-      await pool.query('UPDATE countries SET owner=? WHERE id=?',[login,countryId]);
-      return res.json({ok:true});
+      const [crow] = await pool.query('SELECT * FROM countries WHERE id=?', [countryId]);
+      if (crow.length === 0) return res.json({ ok: false, message: 'Страна не найдена' });
+      const [urow] = await pool.query('SELECT * FROM users WHERE login=?', [login]);
+      if (urow.length === 0) return res.json({ ok: false, message: 'Пользователь не найден' });
+      await pool.query('UPDATE countries SET owner=? WHERE id=?', [login, countryId]);
+      await pool.query('INSERT INTO logs(user,action,timestamp) VALUES(?,?,NOW())',[req.user.login,`Назначил владельца ${login} для страны ${crow[0].name}`]);
+      return res.json({ ok: true });
     }
 
     if (op === 'give_points') {
-      if (!['owner','admin'].includes(req.user.role)) return res.json({ok:false,message:'Нет прав'});
+      if (!['owner','admin'].includes(req.user.role)) return res.json({ ok: false, message: 'Нет прав' });
       const { countryId, amount } = req.body;
-      if (!countryId || isNaN(amount)) return res.json({ok:false,message:'Нужны countryId и число'});
-      const [rows] = await pool.query('SELECT * FROM countries WHERE id=?',[countryId]);
-      if (rows.length===0) return res.json({ok:false,message:'Страна не найдена'});
-      const newPoints = (rows[0].points||0)+parseInt(amount,10);
-      await pool.query('UPDATE countries SET points=? WHERE id=?',[newPoints,countryId]);
+      if (!countryId || isNaN(amount)) return res.json({ ok: false, message: 'Нужны countryId и число' });
+      const [rows] = await pool.query('SELECT * FROM countries WHERE id=?', [countryId]);
+      if (rows.length === 0) return res.json({ ok: false, message: 'Страна не найдена' });
+      const newPoints = (rows[0].points || 0) + parseInt(amount, 10);
+      await pool.query('UPDATE countries SET points=? WHERE id=?', [newPoints, countryId]);
+      await pool.query('INSERT INTO logs(user,action,timestamp) VALUES(?,?,NOW())',[req.user.login,`Выдал ${amount} очков стране ${rows[0].name}`]);
+      return res.json({ ok: true });
+    }
+
+    if(op==='log_action'){
+      const { action } = req.body;
+      if(!action) return res.json({ok:false,message:'Нет действия'});
+      await pool.query('INSERT INTO logs(user,action,timestamp) VALUES(?,?,NOW())',[req.user.login, action]);
       return res.json({ok:true});
     }
 
-    return res.json({ok:false,message:'Неизвестная операция'});
-  } catch(e){
+    return res.json({ ok: false, message: 'Неизвестная операция' });
+  } catch (e) {
     console.error('[API] error:', e);
-    return res.json({ok:false,message:e.message});
+    return res.status(500).json({ ok: false, message: e.message });
   }
 });
 
 // --- Logs ---
-app.get('/logs', verifyToken, async (req,res)=>{
-  if(!req.user || req.user.role!=='admin') return res.json([]);
-  try{
+app.get('/logs', verifyToken, async (req, res) => {
+  if (req.user.role !== 'admin') return res.json([]);
+  try {
     const [rows] = await pool.query('SELECT * FROM logs ORDER BY timestamp DESC');
+    await pool.query('INSERT INTO logs(user,action,timestamp) VALUES(?,?,NOW())',[req.user.login,'Просмотрел логи']);
     res.json(rows);
-  }catch(e){
+  } catch (e) {
     console.error('[LOGS] error:', e);
     res.json([]);
   }
 });
 
-// --- Healthcheck ---
-app.get('/test', (_req,res)=>res.json({ok:true,msg:'Server is alive'}));
-
 // --- SPA fallback ---
-app.get('*', (req,res)=>{ res.sendFile(path.join(__dirname,'public','index.html')); });
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
 
 // --- Start ---
-app.listen(PORT, ()=>console.log('Server running on port '+PORT));
+app.listen(PORT, () => console.log('Server running on port ' + PORT));
