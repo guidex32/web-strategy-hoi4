@@ -59,6 +59,18 @@ async function verifyToken(req, res, next) {
   }
 }
 
+// --- Logging helper ---
+async function addLog(user, action, role) {
+  try {
+    await pool.query(
+      'INSERT INTO logs(user, action, role, timestamp) VALUES(?,?,?,NOW())',
+      [user, action, role]
+    );
+  } catch (e) {
+    console.error('[LOG] error:', e.message);
+  }
+}
+
 // --- AUTH ---
 app.post('/api/auth', async (req, res) => {
   const { op, login, password } = req.body || {};
@@ -70,8 +82,7 @@ app.post('/api/auth', async (req, res) => {
       const [newUserRows] = await pool.query('SELECT * FROM users WHERE login=?', [login]);
       const u = newUserRows[0];
       const token = jwt.sign({ id: u.id, login: u.login, role: u.role }, SECRET, { expiresIn: '7d' });
-      // логируем регистрацию
-      await pool.query('INSERT INTO logs(user,action,timestamp) VALUES(?,?,NOW())',[u.login,'Зарегистрировался']);
+      await addLog(u.login, 'зарегистрировался', u.role);
       return res.json({ ok: true, token, user: { id: u.id, login: u.login, role: u.role } });
     }
 
@@ -80,8 +91,7 @@ app.post('/api/auth', async (req, res) => {
       if (rows.length === 0) return res.json({ ok: false, message: 'Неверный логин или пароль' });
       const u = rows[0];
       const token = jwt.sign({ id: u.id, login: u.login, role: u.role }, SECRET, { expiresIn: '7d' });
-      // логируем успешную авторизацию
-      await pool.query('INSERT INTO logs(user,action,timestamp) VALUES(?,?,NOW())',[u.login,`Авторизовался (роль: ${u.role})`]);
+      await addLog(u.login, 'вошёл в систему', u.role);
       return res.json({ ok: true, token, user: { id: u.id, login: u.login, role: u.role } });
     }
 
@@ -135,8 +145,9 @@ app.post('/api', verifyToken, async (req, res) => {
   const { op } = req.body || {};
   try {
     if (op === 'toggle_economy') {
+      if (!['admin', 'owner'].includes(req.user.role)) return res.json({ ok: false, message: 'Нет прав' });
       ECONOMY_ON = !ECONOMY_ON;
-      await pool.query('INSERT INTO logs(user,action,timestamp) VALUES(?,?,NOW())',[req.user.login,`Переключил экономику: ${ECONOMY_ON}`]);
+      await addLog(req.user.login, `переключил экономику на ${ECONOMY_ON}`, req.user.role);
       return res.json({ ok: true, value: ECONOMY_ON });
     }
 
@@ -148,7 +159,7 @@ app.post('/api', verifyToken, async (req, res) => {
       const army = Object.assign({}, JSON.parse(country.army || '{}'));
       army[unit] = (army[unit] || 0) + 1;
       await pool.query('UPDATE countries SET army=? WHERE id=?', [JSON.stringify(army), countryId]);
-      await pool.query('INSERT INTO logs(user,action,timestamp) VALUES(?,?,NOW())',[req.user.login,`Купил юнит ${unit} для страны ${country.name}`]);
+      await addLog(req.user.login, `купил юнит ${unit} для страны ${countryId}`, req.user.role);
       return res.json({ ok: true });
     }
 
@@ -157,7 +168,7 @@ app.post('/api', verifyToken, async (req, res) => {
       const [rows] = await pool.query('SELECT * FROM countries WHERE id=?', [defenderId]);
       if (rows.length === 0) return res.json({ ok: false, message: 'Страна не найдена' });
       await pool.query('UPDATE countries SET status=? WHERE id=?', ['war', defenderId]);
-      await pool.query('INSERT INTO logs(user,action,timestamp) VALUES(?,?,NOW())',[req.user.login,`Объявил войну стране ${rows[0].name}`]);
+      await addLog(req.user.login, `объявил войну стране ${defenderId}`, req.user.role);
       return res.json({ ok: true });
     }
 
@@ -167,53 +178,44 @@ app.post('/api', verifyToken, async (req, res) => {
       if (rows.length === 0) return res.json({ ok: false, message: 'Страна не найдена' });
       const points = Math.max((rows[0].points || 0) - 10, 0);
       await pool.query('UPDATE countries SET points=? WHERE id=?', [points, defenderId]);
-      await pool.query('INSERT INTO logs(user,action,timestamp) VALUES(?,?,NOW())',[req.user.login,`Атаковал страну ${rows[0].name}, потеряно очков 10`]);
+      await addLog(req.user.login, `атаковал страну ${defenderId} (-10 очков)`, req.user.role);
       return res.json({ ok: true, lost: 10 });
     }
 
     if (op === 'create_country') {
-      if (!['owner','admin'].includes(req.user.role)) return res.json({ ok: false, message: 'Нет прав' });
+      if (!['owner', 'admin'].includes(req.user.role)) return res.json({ ok: false, message: 'Нет прав' });
       const { name, flag, x, y } = req.body;
-      if (!name || /[0-9]/.test(name) || name.length > 256) {
-        return res.json({ ok: false, message: 'Некорректное название' });
-      }
+      if (!name || /[0-9]/.test(name) || name.length > 256) return res.json({ ok: false, message: 'Некорректное название' });
       await pool.query(
         'INSERT INTO countries(name, flag, owner, economy, army, status, points, x, y) VALUES(?,?,?,?,?,?,?,?,?)',
         [name, flag || '', req.user.login, 0, '{}', 'peace', 0, x || 0, y || 0]
       );
-      await pool.query('INSERT INTO logs(user,action,timestamp) VALUES(?,?,NOW())',[req.user.login,`Создана страна ${name} с флагом ${flag}`]);
+      await addLog(req.user.login, `создал страну ${name} с флагом ${flag}`, req.user.role);
       return res.json({ ok: true });
     }
 
     if (op === 'assign_owner') {
-      if (!['owner','admin'].includes(req.user.role)) return res.json({ ok: false, message: 'Нет прав' });
+      if (!['owner', 'admin'].includes(req.user.role)) return res.json({ ok: false, message: 'Нет прав' });
       const { countryId, login } = req.body;
       const [crow] = await pool.query('SELECT * FROM countries WHERE id=?', [countryId]);
       if (crow.length === 0) return res.json({ ok: false, message: 'Страна не найдена' });
       const [urow] = await pool.query('SELECT * FROM users WHERE login=?', [login]);
       if (urow.length === 0) return res.json({ ok: false, message: 'Пользователь не найден' });
       await pool.query('UPDATE countries SET owner=? WHERE id=?', [login, countryId]);
-      await pool.query('INSERT INTO logs(user,action,timestamp) VALUES(?,?,NOW())',[req.user.login,`Назначил владельца ${login} для страны ${crow[0].name}`]);
+      await addLog(req.user.login, `назначил владельца ${login} для страны ${countryId}`, req.user.role);
       return res.json({ ok: true });
     }
 
     if (op === 'give_points') {
-      if (!['owner','admin'].includes(req.user.role)) return res.json({ ok: false, message: 'Нет прав' });
+      if (!['owner', 'admin'].includes(req.user.role)) return res.json({ ok: false, message: 'Нет прав' });
       const { countryId, amount } = req.body;
       if (!countryId || isNaN(amount)) return res.json({ ok: false, message: 'Нужны countryId и число' });
       const [rows] = await pool.query('SELECT * FROM countries WHERE id=?', [countryId]);
       if (rows.length === 0) return res.json({ ok: false, message: 'Страна не найдена' });
       const newPoints = (rows[0].points || 0) + parseInt(amount, 10);
       await pool.query('UPDATE countries SET points=? WHERE id=?', [newPoints, countryId]);
-      await pool.query('INSERT INTO logs(user,action,timestamp) VALUES(?,?,NOW())',[req.user.login,`Выдал ${amount} очков стране ${rows[0].name}`]);
+      await addLog(req.user.login, `выдал ${amount} очков стране ${countryId}`, req.user.role);
       return res.json({ ok: true });
-    }
-
-    if(op==='log_action'){
-      const { action } = req.body;
-      if(!action) return res.json({ok:false,message:'Нет действия'});
-      await pool.query('INSERT INTO logs(user,action,timestamp) VALUES(?,?,NOW())',[req.user.login, action]);
-      return res.json({ok:true});
     }
 
     return res.json({ ok: false, message: 'Неизвестная операция' });
@@ -225,10 +227,10 @@ app.post('/api', verifyToken, async (req, res) => {
 
 // --- Logs ---
 app.get('/logs', verifyToken, async (req, res) => {
-  if (req.user.role !== 'admin') return res.json([]);
+  if (!['admin'].includes(req.user.role)) return res.json([]);
   try {
     const [rows] = await pool.query('SELECT * FROM logs ORDER BY timestamp DESC');
-    await pool.query('INSERT INTO logs(user,action,timestamp) VALUES(?,?,NOW())',[req.user.login,'Просмотрел логи']);
+    await addLog(req.user.login, 'посмотрел логи', req.user.role);
     res.json(rows);
   } catch (e) {
     console.error('[LOGS] error:', e);
