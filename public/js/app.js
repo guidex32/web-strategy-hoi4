@@ -41,39 +41,48 @@ async function loadCountries(){
 }
 
 window.addEventListener('DOMContentLoaded',()=>{
+
   const btnLogin = $('btn-login');
   const btnLogout = $('btn-logout');
   const btnRegister = $('btn-register');
   const btnSignin = $('btn-signin');
   const dlgAuth = $('dlg-auth');
 
-  if(btnLogin&&dlgAuth) btnLogin.onclick = ()=>dlgAuth.showModal();
+  if(btnLogin && dlgAuth) btnLogin.onclick = ()=>dlgAuth.showModal();
   if(btnLogout) btnLogout.onclick = async ()=>{ TOKEN=''; USER=null; localStorage.removeItem('token'); await checkSession(); };
 
   if(btnRegister){
-    btnRegister.onclick = async e=>{
+    btnRegister.addEventListener('click', async e=>{
       e.preventDefault();
       const loginInput = $('auth-username'); const passInput = $('auth-password');
       if(!loginInput||!passInput) return alert('Форма не найдена!');
       const login = loginInput.value.trim(); const pass = passInput.value.trim();
       if(!login||!pass) return alert('Введите логин и пароль');
       const r = await apiAuth('register',{login,password:pass});
-      if(r.ok){ TOKEN=r.token; USER=r.user; localStorage.setItem('token',TOKEN); if(dlgAuth) dlgAuth.close(); await checkSession(); await loadCountries(); }
-      else alert(r.message);
-    };
+      if(r.ok){
+        TOKEN=r.token; USER=r.user; localStorage.setItem('token',TOKEN);
+        if(dlgAuth) dlgAuth.close();
+        await checkSession();
+        await loadCountries();
+      } else alert(r.message);
+    });
   }
 
   if(btnSignin){
-    btnSignin.onclick = async e=>{
+    btnSignin.addEventListener('click', async e=>{
       e.preventDefault();
       const loginInput = $('auth-username'); const passInput = $('auth-password');
       if(!loginInput||!passInput) return alert('Форма не найдена!');
       const login = loginInput.value.trim(); const pass = passInput.value.trim();
       if(!login||!pass) return alert('Введите логин и пароль');
       const r = await apiAuth('login',{login,password:pass});
-      if(r.ok){ TOKEN=r.token; USER=r.user; localStorage.setItem('token',TOKEN); if(dlgAuth) dlgAuth.close(); await checkSession(); await loadCountries(); }
-      else alert(r.message);
-    };
+      if(r.ok){
+        TOKEN=r.token; USER=r.user; localStorage.setItem('token',TOKEN);
+        if(dlgAuth) dlgAuth.close();
+        await checkSession();
+        await loadCountries();
+      } else alert(r.message);
+    });
   }
 
   checkSession();
