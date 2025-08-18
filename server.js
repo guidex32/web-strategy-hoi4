@@ -3,7 +3,6 @@ const cors = require('cors');
 const mysql = require('mysql2/promise');
 const path = require('path');
 const jwt = require('jsonwebtoken');
-const fs = require('fs');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -59,6 +58,48 @@ async function verifyToken(req, res, next) {
   }
 }
 
+// --- AUTH ---
+app.post('/api/auth', async (req, res) => {
+  const { op, login, password } = req.body || {};
+  try {
+    if (op === 'register') {
+      const [rows] = await pool.query('SELECT * FROM users WHERE login=?', [login]);
+      if (rows.length) return res.json({ ok: false, message: 'Логин занят' });
+      await pool.query('INSERT INTO users(login,password,role) VALUES(?,?,?)', [login, password, 'player']);
+      const [newUserRows] = await pool.query('SELECT * FROM users WHERE login=?', [login]);
+      const u = newUserRows[0];
+      const token = jwt.sign({ id: u.id, login: u.login, role: u.role }, SECRET, { expiresIn: '7d' });
+      await pool.query('INSERT INTO logs(user,action,timestamp) VALUES(?,?,NOW())',[u.login,'Зарегистрировался']);
+      return res.json({ ok: true, token, user: { id: u.id, login: u.login, role: u.role } });
+    }
+
+    if (op === 'login') {
+      const [rows] = await pool.query('SELECT * FROM users WHERE login=? AND password=?', [login, password]);
+      if (rows.length === 0) return res.json({ ok: false, message: 'Неверный логин или пароль' });
+      const u = rows[0];
+      const token = jwt.sign({ id: u.id, login: u.login, role: u.role }, SECRET, { expiresIn: '7d' });
+      await pool.query('INSERT INTO logs(user,action,timestamp) VALUES(?,?,NOW())',[u.login,`Авторизовался (роль: ${u.role})`]);
+      return res.json({ ok: true, token, user: { id: u.id, login: u.login, role: u.role } });
+    }
+
+    if (op === 'session') {
+      const token = readBearer(req);
+      if (!token) return res.json({ ok: false, message: 'No token' });
+      try {
+        const decoded = jwt.verify(token, SECRET);
+        return res.json({ ok: true, user: decoded });
+      } catch {
+        return res.json({ ok: false, message: 'Invalid token' });
+      }
+    }
+
+    return res.json({ ok: false, message: 'Неизвестная операция' });
+  } catch (e) {
+    console.error('[AUTH] error:', e);
+    return res.status(500).json({ ok: false, message: e.message });
+  }
+});
+
 // --- Countries ---
 app.get('/api/countries', verifyToken, async (_req, res) => {
   try {
@@ -73,9 +114,9 @@ app.get('/api/countries', verifyToken, async (_req, res) => {
         army: JSON.parse(c.army || '{}'),
         status: c.status || 'peace',
         points: c.points || 0,
-        flag: c.flag || '',
         x: c.x || 0,
-        y: c.y || 0
+        y: c.y || 0,
+        flag: c.flag || ''
       };
     });
     res.json(countries);
@@ -85,85 +126,90 @@ app.get('/api/countries', verifyToken, async (_req, res) => {
   }
 });
 
-// --- Flags ---
-app.get('/api/flags', verifyToken, async (req, res) => {
-  try {
-    const dir = path.join(__dirname, 'public', 'flags');
-    if (!fs.existsSync(dir)) return res.json([]);
-    const files = fs.readdirSync(dir).filter(f => /\.(png|jpg|jpeg|svg|webp)$/i.test(f));
-    res.json(files);
-  } catch (e) {
-    console.error('[FLAGS] error:', e);
-    res.status(500).json([]);
-  }
-});
-
 // --- Actions ---
+let ECONOMY_ON = true;
+
 app.post('/api', verifyToken, async (req, res) => {
   const { op } = req.body || {};
   try {
-    // --- Build buildings ---
-    if (op === 'build') {
-      const { countryId, buildingType } = req.body;
-      const buildingCosts = {
-        office: { cost: 10, income: 5 },
-        military: { cost: 30, income: 15 },
-        airport: { cost: 100, income: 50 },
-        oil: { cost: 500, income: 200 }
-      };
-      if (!buildingCosts[buildingType]) return res.json({ ok: false, message: 'Неверный тип здания' });
-
-      const [rows] = await pool.query('SELECT * FROM countries WHERE id=?', [countryId]);
-      if (rows.length === 0) return res.json({ ok: false, message: 'Страна не найдена' });
-
-      const country = rows[0];
-      if (country.owner !== req.user.login) return res.json({ ok: false, message: 'Вы не владелец страны' });
-
-      if (country.points < buildingCosts[buildingType].cost) return res.json({ ok: false, message: 'Недостаточно очков' });
-
-      // обновляем очки и добавляем здание
-      const armyData = JSON.parse(country.army || '{}');
-      const buildings = armyData.buildings || [];
-      buildings.push({ type: buildingType, income: buildingCosts[buildingType].income });
-
-      await pool.query(
-        'UPDATE countries SET points=?, army=? WHERE id=?',
-        [country.points - buildingCosts[buildingType].cost, JSON.stringify({ ...armyData, buildings }), countryId]
-      );
-
-      await pool.query('INSERT INTO logs(user,action,timestamp) VALUES(?,?,NOW())',
-        [req.user.login, `Построил здание ${buildingType} в стране ${country.name}`]);
-
-      return res.json({ ok: true, message: 'Здание построено' });
+    if (op === 'toggle_economy') {
+      ECONOMY_ON = !ECONOMY_ON;
+      await pool.query('INSERT INTO logs(user,action,timestamp) VALUES(?,?,NOW())',[req.user.login,`Переключил экономику: ${ECONOMY_ON}`]);
+      return res.json({ ok: true, value: ECONOMY_ON });
     }
 
-    // --- Create country ---
+    if (op === 'buy_unit') {
+      const { countryId, unit } = req.body;
+      const [rows] = await pool.query('SELECT * FROM countries WHERE id=?', [countryId]);
+      if (rows.length === 0) return res.json({ ok: false, message: 'Страна не найдена' });
+      const country = rows[0];
+      const army = Object.assign({}, JSON.parse(country.army || '{}'));
+      army[unit] = (army[unit] || 0) + 1;
+      await pool.query('UPDATE countries SET army=? WHERE id=?', [JSON.stringify(army), countryId]);
+      await pool.query('INSERT INTO logs(user,action,timestamp) VALUES(?,?,NOW())',[req.user.login,`Купил юнит ${unit} для страны ${country.name}`]);
+      return res.json({ ok: true });
+    }
+
+    if (op === 'declare_war') {
+      const { defenderId } = req.body;
+      const [rows] = await pool.query('SELECT * FROM countries WHERE id=?', [defenderId]);
+      if (rows.length === 0) return res.json({ ok: false, message: 'Страна не найдена' });
+      await pool.query('UPDATE countries SET status=? WHERE id=?', ['war', defenderId]);
+      await pool.query('INSERT INTO logs(user,action,timestamp) VALUES(?,?,NOW())',[req.user.login,`Объявил войну стране ${rows[0].name}`]);
+      return res.json({ ok: true });
+    }
+
+    if (op === 'attack') {
+      const { defenderId } = req.body;
+      const [rows] = await pool.query('SELECT * FROM countries WHERE id=?', [defenderId]);
+      if (rows.length === 0) return res.json({ ok: false, message: 'Страна не найдена' });
+      const points = Math.max((rows[0].points || 0) - 10, 0);
+      await pool.query('UPDATE countries SET points=? WHERE id=?', [points, defenderId]);
+      await pool.query('INSERT INTO logs(user,action,timestamp) VALUES(?,?,NOW())',[req.user.login,`Атаковал страну ${rows[0].name}, потеряно очков 10`]);
+      return res.json({ ok: true, lost: 10 });
+    }
+
     if (op === 'create_country') {
       if (!['owner','admin'].includes(req.user.role)) return res.json({ ok: false, message: 'Нет прав' });
-      const { name, flag, x, y, owner } = req.body;
-
-      if (!name || /[0-9]/.test(name) || name.length > 256)
-        return res.json({ ok: false, message: 'Некорректное название' });
-
-      const [exists] = await pool.query('SELECT * FROM countries WHERE name=?', [name]);
-      if (exists.length > 0) return res.json({ ok: false, message: 'Такая страна уже есть' });
-
-      const [urow] = await pool.query('SELECT * FROM users WHERE login=?', [owner]);
-      if (urow.length === 0) return res.json({ ok: false, message: 'Пользователь не найден' });
-
-      const [hasCountry] = await pool.query('SELECT * FROM countries WHERE owner=?', [owner]);
-      if (hasCountry.length > 0) return res.json({ ok: false, message: 'У пользователя уже есть страна' });
-
-      const flagPath = path.join(__dirname, 'public', 'flags', flag);
-      if (!fs.existsSync(flagPath)) return res.json({ ok: false, message: 'Флаг не найден' });
-
+      const { name, flag, x, y } = req.body;
+      if (!name || /[0-9]/.test(name) || name.length > 256) return res.json({ ok: false, message: 'Некорректное название' });
       await pool.query(
         'INSERT INTO countries(name, flag, owner, economy, army, status, points, x, y) VALUES(?,?,?,?,?,?,?,?,?)',
-        [name, flag, owner, 0, '{}', 'peace', 0, x || 0, y || 0]
+        [name, flag || '', req.user.login, 0, '{}', 'peace', 0, x || 0, y || 0]
       );
-      await pool.query('INSERT INTO logs(user,action,timestamp) VALUES(?,?,NOW())',
-        [req.user.login, `Создана страна ${name} с флагом ${flag}`]);
+      await pool.query('INSERT INTO logs(user,action,timestamp) VALUES(?,?,NOW())',[req.user.login,`Создана страна ${name} с флагом ${flag}`]);
       return res.json({ ok: true });
+    }
+
+    if (op === 'assign_owner') {
+      if (!['owner','admin'].includes(req.user.role)) return res.json({ ok: false, message: 'Нет прав' });
+      const { countryId, login } = req.body;
+      const [crow] = await pool.query('SELECT * FROM countries WHERE id=?', [countryId]);
+      if (crow.length === 0) return res.json({ ok: false, message: 'Страна не найдена' });
+      const [urow] = await pool.query('SELECT * FROM users WHERE login=?', [login]);
+      if (urow.length === 0) return res.json({ ok: false, message: 'Пользователь не найден' });
+      await pool.query('UPDATE countries SET owner=? WHERE id=?', [login, countryId]);
+      await pool.query('INSERT INTO logs(user,action,timestamp) VALUES(?,?,NOW())',[req.user.login,`Назначил владельца ${login} для страны ${crow[0].name}`]);
+      return res.json({ ok: true });
+    }
+
+    if (op === 'give_points') {
+      if (!['owner','admin'].includes(req.user.role)) return res.json({ ok: false, message: 'Нет прав' });
+      const { countryId, amount } = req.body;
+      if (!countryId || isNaN(amount)) return res.json({ ok: false, message: 'Нужны countryId и число' });
+      const [rows] = await pool.query('SELECT * FROM countries WHERE id=?', [countryId]);
+      if (rows.length === 0) return res.json({ ok: false, message: 'Страна не найдена' });
+      const newPoints = (rows[0].points || 0) + parseInt(amount, 10);
+      await pool.query('UPDATE countries SET points=? WHERE id=?', [newPoints, countryId]);
+      await pool.query('INSERT INTO logs(user,action,timestamp) VALUES(?,?,NOW())',[req.user.login,`Выдал ${amount} очков стране ${rows[0].name}`]);
+      return res.json({ ok: true });
+    }
+
+    if(op==='log_action'){
+      const { action } = req.body;
+      if(!action) return res.json({ok:false,message:'Нет действия'});
+      await pool.query('INSERT INTO logs(user,action,timestamp) VALUES(?,?,NOW())',[req.user.login, action]);
+      return res.json({ok:true});
     }
 
     return res.json({ ok: false, message: 'Неизвестная операция' });
@@ -175,11 +221,10 @@ app.post('/api', verifyToken, async (req, res) => {
 
 // --- Logs ---
 app.get('/logs', verifyToken, async (req, res) => {
-  if (!['admin','owner'].includes(req.user.role)) return res.json([]);
+  if (!['admin'].includes(req.user.role)) return res.json([]);
   try {
     const [rows] = await pool.query('SELECT * FROM logs ORDER BY timestamp DESC');
-    await pool.query('INSERT INTO logs(user,action,timestamp) VALUES(?,?,NOW())',
-      [req.user.login,'Просмотрел логи']);
+    await pool.query('INSERT INTO logs(user,action,timestamp) VALUES(?,?,NOW())',[req.user.login,'Просмотрел логи']);
     res.json(rows);
   } catch (e) {
     console.error('[LOGS] error:', e);
