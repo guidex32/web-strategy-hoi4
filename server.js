@@ -59,9 +59,6 @@ async function verifyToken(req, res, next) {
   }
 }
 
-// --- AUTH ---
-// оставлено без изменений
-
 // --- Countries ---
 app.get('/api/countries', verifyToken, async (_req, res) => {
   try {
@@ -124,15 +121,18 @@ app.post('/api', verifyToken, async (req, res) => {
 
       if (country.points < buildingCosts[buildingType].cost) return res.json({ ok: false, message: 'Недостаточно очков' });
 
-      // обновляем очки и добавляем доход здания
+      // обновляем очки и добавляем здание
       const armyData = JSON.parse(country.army || '{}');
       const buildings = armyData.buildings || [];
       buildings.push({ type: buildingType, income: buildingCosts[buildingType].income });
 
-      await pool.query('UPDATE countries SET points=?, army=? WHERE id=?',
-        [country.points - buildingCosts[buildingType].cost, JSON.stringify({ ...armyData, buildings }), countryId]);
+      await pool.query(
+        'UPDATE countries SET points=?, army=? WHERE id=?',
+        [country.points - buildingCosts[buildingType].cost, JSON.stringify({ ...armyData, buildings }), countryId]
+      );
 
-      await pool.query('INSERT INTO logs(user,action,timestamp) VALUES(?,?,NOW())', [req.user.login, `Построил здание ${buildingType} в стране ${country.name}`]);
+      await pool.query('INSERT INTO logs(user,action,timestamp) VALUES(?,?,NOW())',
+        [req.user.login, `Построил здание ${buildingType} в стране ${country.name}`]);
 
       return res.json({ ok: true, message: 'Здание построено' });
     }
@@ -161,7 +161,8 @@ app.post('/api', verifyToken, async (req, res) => {
         'INSERT INTO countries(name, flag, owner, economy, army, status, points, x, y) VALUES(?,?,?,?,?,?,?,?,?)',
         [name, flag, owner, 0, '{}', 'peace', 0, x || 0, y || 0]
       );
-      await pool.query('INSERT INTO logs(user,action,timestamp) VALUES(?,?,NOW())',[req.user.login,`Создана страна ${name} с флагом ${flag}`]);
+      await pool.query('INSERT INTO logs(user,action,timestamp) VALUES(?,?,NOW())',
+        [req.user.login, `Создана страна ${name} с флагом ${flag}`]);
       return res.json({ ok: true });
     }
 
@@ -177,7 +178,8 @@ app.get('/logs', verifyToken, async (req, res) => {
   if (!['admin','owner'].includes(req.user.role)) return res.json([]);
   try {
     const [rows] = await pool.query('SELECT * FROM logs ORDER BY timestamp DESC');
-    await pool.query('INSERT INTO logs(user,action,timestamp) VALUES(?,?,NOW())',[req.user.login,'Просмотрел логи']);
+    await pool.query('INSERT INTO logs(user,action,timestamp) VALUES(?,?,NOW())',
+      [req.user.login,'Просмотрел логи']);
     res.json(rows);
   } catch (e) {
     console.error('[LOGS] error:', e);
