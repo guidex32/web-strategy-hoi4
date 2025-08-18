@@ -1,4 +1,4 @@
-// app.js (ПФ) — полный файл, готов к замене
+// app.js (ПФ) — исправлённый / полный
 // =================== CONFIG ===================
 const API = 'https://web-strategy-hoi4.onrender.com/api';
 const ORIGIN = 'https://web-strategy-hoi4.onrender.com';
@@ -9,7 +9,6 @@ let COUNTRIES = [];
 // кэш: baseName -> fileName с расширением
 const FLAG_RESOLVE_CACHE = Object.create(null);
 
-// UI helper
 const $ = id => document.getElementById(id);
 function show(el){ if(el) el.classList.remove('hidden'); }
 function hide(el){ if(el) el.classList.add('hidden'); }
@@ -30,9 +29,7 @@ async function apiAuth(op, data){
       body: JSON.stringify({ op, ...data })
     });
     return await res.json();
-  }catch(e){
-    return { ok:false, message: e.message };
-  }
+  }catch(e){ return { ok:false, message: e.message }; }
 }
 
 async function apiPost(op, data){
@@ -43,9 +40,7 @@ async function apiPost(op, data){
       body: JSON.stringify({ op, ...data })
     });
     return await res.json();
-  }catch(e){
-    return { ok:false, message: e.message };
-  }
+  }catch(e){ return { ok:false, message: e.message }; }
 }
 
 // =================== SESSION / COUNTRIES ===================
@@ -89,7 +84,7 @@ function updatePoints(){
   if(p) p.textContent = 'Очки: ' + total;
 }
 
-// =================== PROMPT DIALOG HELPER ===================
+// =================== PROMPT HELPER ===================
 function promptAsync(message){
   return new Promise(resolve => {
     const input = $('prompt-input');
@@ -112,6 +107,13 @@ function promptAsync(message){
       resolve(input.value.trim());
     };
     ok.addEventListener('click', handler);
+
+    // also handle cancel (user pressed ESC or Cancel button)
+    dlg.addEventListener('cancel', function onCancel(ev){
+      dlg.removeEventListener('cancel', onCancel);
+      ok.removeEventListener('click', handler);
+      resolve('');
+    }, { once: true });
   });
 }
 
@@ -143,23 +145,42 @@ async function countryExistsByName(name){
 }
 
 // =================== FLAGS: LIST & RESOLVE ===================
-// Try server endpoint first (/api/flags). If not available - fall back to manual input with resolveExistingFlagFilename check.
+// Try server endpoint first, then manifest files, then manual HEAD/GET checks
 async function fetchFlagsList(){
+  // 1) server endpoint /api/flags (preferred)
   try{
     const r = await fetch(`${API}/flags`, { headers: buildHeaders(false), cache: 'no-store' });
     if(r.ok){
       const ct = r.headers.get('content-type') || '';
       if(ct.includes('application/json')){
         const arr = await r.json();
-        // server returns filenames with extensions -> convert to base names
         if(Array.isArray(arr) && arr.length) {
-          return arr.map(f => String(f).replace(/^\/?flags\//,'').replace(/\.(png|jpe?g|svg|webp)$/i,''));
+          // normalize names: remove extensions and any leading path
+          return arr.map(f => String(f).replace(/^.*\/?/, '').replace(/\.(png|jpe?g|svg|webp)$/i,''));
         }
       }
     }
-  }catch(_){ /* fall through */ }
+  }catch(_){}
 
-  // no manifest and no /api/flags — return null to indicate manual input flow
+  // 2) static manifest in /flags/
+  const candidates = ['/flags/manifest.json','/flags/index.json','/flags/_manifest.json'];
+  for(const url of candidates){
+    try{
+      const r = await fetch(ORIGIN + url, { cache: 'no-store' });
+      if(r.ok){
+        const ct = r.headers.get('content-type') || '';
+        if(ct.includes('application/json')){
+          const j = await r.json();
+          let arr = Array.isArray(j) ? j : (Array.isArray(j.flags) ? j.flags : null);
+          if(arr && arr.length){
+            return arr.map(f => String(f).replace(/^\/?flags\//,'').replace(/\.(png|jpe?g|svg|webp)$/i,'')); 
+          }
+        }
+      }
+    }catch(_){}
+  }
+
+  // 3) no list available
   return null;
 }
 
@@ -170,20 +191,20 @@ async function resolveExistingFlagFilename(baseName){
   for(const ext of exts){
     const url = `${ORIGIN}/flags/${encodeURIComponent(baseName)}.${ext}`;
     try{
-      // try HEAD first (faster when supported)
-      let r = await fetch(url, { method:'HEAD', cache:'no-store' });
+      // try HEAD first (fast)
+      const r = await fetch(url, { method:'HEAD', cache:'no-store' });
       if(r.ok){ FLAG_RESOLVE_CACHE[baseName] = `${baseName}.${ext}`; return FLAG_RESOLVE_CACHE[baseName]; }
     }catch(_){}
     try{
-      // some servers don't allow HEAD — try GET
-      let r2 = await fetch(url, { method:'GET', cache:'no-store' });
+      const r2 = await fetch(url, { method:'GET', cache:'no-store' });
       if(r2.ok){ FLAG_RESOLVE_CACHE[baseName] = `${baseName}.${ext}`; return FLAG_RESOLVE_CACHE[baseName]; }
     }catch(_){}
   }
   return null;
 }
 
-// =================== MAP + MARKERS (position + svg scaling) ===================
+// =================== MAP RENDER ===================
+// Markers layer aligned to .map-wrap so scaling doesn't move markers unpredictably
 function ensureMarkersLayer(){
   const wrap = document.querySelector('.map-wrap') || document.body;
   if(getComputedStyle(wrap).position === 'static'){
@@ -207,22 +228,16 @@ function ensureMarkersLayer(){
   return layer;
 }
 
-// Helper: get svg viewBox size (if accessible)
-function getSvgViewBoxSize(mapObj){
-  try{
-    const doc = mapObj.contentDocument;
-    const svg = doc && doc.documentElement;
-    if(svg && svg.viewBox && svg.viewBox.baseVal && svg.viewBox.baseVal.width){
-      return { width: svg.viewBox.baseVal.width, height: svg.viewBox.baseVal.height };
-    }
-    // fallback: try width/height attributes or client sizes
-    if(svg){
-      const w = parseFloat(svg.getAttribute('width')) || svg.clientWidth || null;
-      const h = parseFloat(svg.getAttribute('height')) || svg.clientHeight || null;
-      if(w && h) return { width: w, height: h };
-    }
-  }catch(_){}
-  return null;
+// Utility: convert click client coords (relative to map object's bounding rect)
+function clientToMapCoords(clientX, clientY){
+  const mapEl = $('map');
+  if(!mapEl) return { x: 0, y: 0 };
+  const rect = mapEl.getBoundingClientRect();
+  // If SVG inside <object> has viewBox different from pixel size, we'll keep pixel coords.
+  // Client coordinates relative to map container:
+  const x = Math.round(clientX - rect.left);
+  const y = Math.round(clientY - rect.top);
+  return { x, y };
 }
 
 async function renderCountriesOnMap(){
@@ -232,44 +247,32 @@ async function renderCountriesOnMap(){
   const layer = ensureMarkersLayer();
   layer.innerHTML = '';
 
+  // get wrapper rect so markers align with the displayed map element
   const rect = mapObj.getBoundingClientRect();
-  const vb = getSvgViewBoxSize(mapObj); // may be null
-  const scaleX = vb ? (rect.width / vb.width) : 1;
-  const scaleY = vb ? (rect.height / vb.height) : 1;
 
   for(const c of COUNTRIES){
+    // require numeric x/y
     if(typeof c.x !== 'number' || typeof c.y !== 'number') continue;
 
     const marker = document.createElement('div');
     marker.className = 'country-flag';
+    // Position relative to wrapper (use same units as when creating country: stored as pixel offsets inside map object bounding rect)
     marker.style.position = 'absolute';
-    // compute pixel positions relative to layer
-    const px = vb ? Math.round(c.x * scaleX) : Math.round(c.x);
-    const py = vb ? Math.round(c.y * scaleY) : Math.round(c.y);
-    // layer's top-left aligns with mapObj inside map-wrap; but map may be centered — compute offsets relative to layer
-    // mapObj is centered or has margins; we want coordinates inside layer, which covers the whole map-wrap,
-    // so compute offsets based on mapObj position inside the wrap:
-    const wrap = layer.parentElement.getBoundingClientRect();
-    const offsetLeft = rect.left - wrap.left;
-    const offsetTop  = rect.top - wrap.top;
+    // ensure values are numbers
+    const left = Math.round((c.x || 0));
+    const top = Math.round((c.y || 0));
 
-    const left = Math.max(0, (offsetLeft + px - 10)); // subtract half marker (marker width ~20)
-    const top  = Math.max(0, (offsetTop  + py - 10));
-    marker.style.left = left + 'px';
-    marker.style.top  = top + 'px';
+    marker.style.left = Math.max(0, (left - 10)) + 'px';
+    marker.style.top  = Math.max(0, (top - 10)) + 'px';
     marker.style.width = '20px';
     marker.style.height = '20px';
-    marker.style.borderRadius = '50%';
-    marker.style.background = '#e7eef6';
-    marker.style.boxShadow = '0 0 2px rgba(0,0,0,.4)';
     marker.style.pointerEvents = 'auto';
     marker.title = `${c.name} (${c.owner || '—'})`;
 
-    // try to show flag image
+    // show image if present
     const base = (c.flag || '').replace(/\.(png|jpe?g|svg|webp)$/i,'');
     let file = base ? (FLAG_RESOLVE_CACHE[base] || null) : null;
     if(!file && base){
-      // async resolve — append placeholder now, replace when resolved
       resolveExistingFlagFilename(base).then(f=>{
         if(f){
           const img = new Image();
@@ -279,9 +282,12 @@ async function renderCountriesOnMap(){
           img.style.objectFit = 'cover';
           marker.innerHTML = '';
           marker.appendChild(img);
+        } else {
+          // fallback to initial letter
+          marker.textContent = (c.name || '?').slice(0,1).toUpperCase();
         }
       });
-    } else if(file){
+    }else if(file){
       const img = new Image();
       img.src = `${ORIGIN}/flags/${file}`;
       img.style.width = '100%';
@@ -289,16 +295,7 @@ async function renderCountriesOnMap(){
       img.style.objectFit = 'cover';
       marker.appendChild(img);
     } else {
-      // fallback label first letter
-      const txt = document.createElement('div');
-      txt.style.fontSize = '10px';
-      txt.style.lineHeight = '20px';
-      txt.style.textAlign = 'center';
-      txt.style.width = '100%';
-      txt.style.color = '#001018';
-      txt.textContent = (c.name||'')[0] || '?';
-      marker.innerHTML = '';
-      marker.appendChild(txt);
+      marker.textContent = (c.name || '?').slice(0,1).toUpperCase();
     }
 
     layer.appendChild(marker);
@@ -306,123 +303,96 @@ async function renderCountriesOnMap(){
 }
 
 // =================== CREATE COUNTRY FLOW ===================
-// Full flow: name -> check -> choose flag (server list or manual) -> owner optional -> click on map -> create
 async function createCountryFlow(){
   if(!USER || !(USER.role === 'owner' || USER.role === 'admin')) return alert('Нет прав');
 
-  // 1) Name
+  // 1) Название
   const name = await promptAsync('Введите название страны (≤256, без цифр)');
   if(!isValidCountryName(name)) return alert('Некорректное название!');
   if(await countryExistsByName(name)) return alert('Страна с таким именем уже существует');
 
-  // 2) Flags: try server /api/flags
+  // 2) Флаги
   let flags = null;
-  try{ flags = await fetchFlagsList(); }catch(_){ flags = null; }
+  try { flags = await fetchFlagsList(); } catch(_) { flags = null; }
 
   let flagBase = '';
   if(flags && flags.length){
-    // show first N
-    const sample = flags.slice(0, 120); // show many
-    const choice = await promptAsync('Выберите флаг (введите точное имя из списка):\n' + sample.join(', ') + (flags.length>sample.length ? `\n...и ещё ${flags.length-sample.length}` : ''));
+    // show first 50 for readability
+    const sample = flags.slice(0, 50);
+    const choice = await promptAsync('Выберите флаг (введите точное имя из списка):\n' + sample.join(', ') + (flags.length>50 ? `\n...и ещё ${flags.length-50}` : ''));
     if(!choice) return alert('Флаг не выбран');
     if(!flags.includes(choice)) return alert('Такого флага нет в списке');
     const resolved = await resolveExistingFlagFilename(choice);
     if(!resolved) return alert('Файл флага не найден в папке /flags');
     flagBase = choice;
   } else {
-    // manual input + check file exists
-    const manual = await promptAsync('Введите имя флага (без .png/.jpg)\nПапка: /flags');
+    // manual input with real file check
+    const manual = await promptAsync('Введите имя флага (без .png/.jpg/.svg/.webp)\nПапка: /flags');
     if(!manual) return alert('Флаг не выбран');
     const resolved = await resolveExistingFlagFilename(manual);
     if(!resolved) return alert('Файл флага не найден в папке /flags');
     flagBase = manual;
   }
 
-  // 3) owner optional (empty = you)
+  // 3) Владелец (optional). We'll try to assign later (server validates)
   const ownerLogin = await promptAsync('Введите логин владельца страны (пусто = вы)');
 
-  // 4) click on map -> coordinates should be in SVG viewBox coordinate system if viewBox exists
+  // 4) Click on map
   alert('Теперь кликните по карте, где разместить страну');
   const mapObj = $('map');
   if(!mapObj) return alert('Элемент карты не найден');
 
-  // prepare converter
-  const rect = mapObj.getBoundingClientRect();
-  const vb = (function(){
-    try{
-      const doc = mapObj.contentDocument;
-      const svg = doc && doc.documentElement;
-      if(svg && svg.viewBox && svg.viewBox.baseVal && svg.viewBox.baseVal.width){
-        return { width: svg.viewBox.baseVal.width, height: svg.viewBox.baseVal.height };
-      }
-    }catch(_){}
-    return null;
-  })();
-
-  const getCoords = (evt) => {
-    const rx = evt.clientX - rect.left;
-    const ry = evt.clientY - rect.top;
-    if(vb){
-      // convert pixel to viewBox coords
-      const x = Math.round(rx * (vb.width / rect.width));
-      const y = Math.round(ry * (vb.height / rect.height));
-      return { x, y };
-    } else {
-      return { x: Math.round(rx), y: Math.round(ry) };
-    }
-  };
-
   const waitClickOnMap = () => new Promise(resolve=>{
-    let detached = false;
+    let done = false;
     const cleanup = () => {
-      detached = true;
+      done = true;
       mapObj.removeEventListener('click', onObjClick);
+      // try remove svg listener
       try{
         const doc = mapObj.contentDocument;
-        const root = doc && doc.documentElement;
-        if(root) root.removeEventListener('click', onSvgClick);
+        if(doc && doc.documentElement) doc.documentElement.removeEventListener('click', onSvgClick);
       }catch(_){}
     };
-    const onAny = (e) => { if(detached) return; e.preventDefault(); const c = getCoords(e); cleanup(); resolve(c); };
+
+    const onAny = (e) => {
+      if(done) return;
+      // if event from SVG inside object, clientX/Y are fine
+      const c = clientToMapCoords(e.clientX, e.clientY);
+      cleanup();
+      resolve(c);
+    };
     const onObjClick = onAny;
     const onSvgClick = onAny;
 
     mapObj.addEventListener('click', onObjClick);
-    const trySvg = () => {
+
+    // if <object> already loaded, try attach to its SVG document
+    try{
+      const doc = mapObj.contentDocument;
+      if(doc && doc.documentElement){
+        doc.documentElement.addEventListener('click', onSvgClick);
+      }
+    }catch(_){
+      // Cross-origin or not yet ready — fallback to object click only
+    }
+
+    // also attach once load occurs
+    mapObj.addEventListener('load', function onload(){
       try{
         const doc = mapObj.contentDocument;
-        const root = doc && doc.documentElement;
-        if(root) root.addEventListener('click', onSvgClick);
+        if(doc && doc.documentElement) doc.documentElement.addEventListener('click', onSvgClick);
       }catch(_){}
-    };
-    trySvg();
-    mapObj.addEventListener('load', trySvg, { once:true });
+    }, { once:true });
   });
 
   const { x, y } = await waitClickOnMap();
 
-  // 5) create on server
-  const res = await apiPost('create_country', { name, flag: flagBase, x, y });
+  // 5) Create on server
+  const res = await apiPost('create_country', { name, flag: flagBase, x, y, owner: ownerLogin || undefined });
   if(!res || !res.ok) return alert('Ошибка при создании: ' + (res && res.message || 'unknown'));
 
-  // 6) optionally assign owner (if specified and not yourself)
-  if(ownerLogin && ownerLogin.toLowerCase() !== (USER.login||'').toLowerCase()){
-    try{
-      const all = await fetch(`${API}/countries`, { headers: buildHeaders(false) }).then(r=>r.json());
-      const created = Object.values(all || {}).find(c => (c.name||'').toLowerCase() === name.toLowerCase());
-      if(!created) {
-        alert('Страна создана, но не нашлась для назначение владельца — обновите страницу и назначьте вручную.');
-      } else {
-        const ar = await apiPost('assign_owner', { countryId: created.id, login: ownerLogin });
-        if(!ar.ok) return alert('Страна создана, но владельца назначить не удалось: ' + (ar.message || 'unknown'));
-      }
-    }catch(e){
-      console.warn('assign_owner failed:', e);
-    }
-  }
-
   alert('Страна создана');
-  await loadCountries(); // перерисует маркеры
+  await loadCountries();
 }
 
 // =================== LOGS ===================
@@ -434,73 +404,38 @@ async function viewLogsFlow(){
     return;
   }
   try{
-    // try API-root logs first (some servers might expose /api/logs)
-    let res = null;
-    let data = null;
-    try{
-      res = await fetch(`${API}/logs`, { headers: buildHeaders(false) });
-      // if 404 or text/html, fallback
-      const ct = (res.headers.get('content-type') || '');
-      if(!res.ok || !ct.includes('application/json')){
-        // fallback to origin /logs
-        res = await fetch(`${ORIGIN}/logs`, { headers: buildHeaders(false) });
-      }
-    }catch(_){
-      res = await fetch(`${ORIGIN}/logs`, { headers: buildHeaders(false) });
-    }
-
-    const ct = (res.headers.get('content-type') || '');
+    // logs endpoint is at ORIGIN/logs (server side)
+    const res = await fetch(`${ORIGIN}/logs`, { headers: buildHeaders(false) });
+    const ct = (res && res.headers && res.headers.get('content-type')) || '';
+    const text = await res.text();
+    // if server returned HTML (SPA fallback / 404), content-type may be text/html or body starts with <!doctype>
     if(!ct.includes('application/json')){
-      // don't try to parse HTML -> show message
-      $('logs-view').textContent = 'Логи недоступны (сервер вернул не JSON). Проверьте права/эндпоинт на сервере.';
-      $('dlg-logs')?.showModal();
-      return;
-    }
-
-    data = await res.json();
-    if(Array.isArray(data) && data.length){
-      $('logs-view').textContent = data.map(l => `[${l.timestamp}] ${l.user} — ${l.action}`).join('\n');
+      // try to detect JSON text anyway
+      const trimmed = text.trim();
+      if(trimmed.startsWith('{') || trimmed.startsWith('[')){
+        // parse as JSON
+        const data = JSON.parse(trimmed);
+        if(Array.isArray(data) && data.length){
+          $('logs-view').textContent = data.map(l => `[${l.timestamp}] ${l.user} — ${l.action}`).join('\n');
+        } else {
+          $('logs-view').textContent = 'Логи пусты (или нет доступа).';
+        }
+      } else {
+        // server returned HTML (likely a 404 or SPA index.html) — show clear message
+        $('logs-view').textContent = 'Логи недоступны: сервер вернул HTML (возможно нет прав или маршрут /logs защищён). Проверьте, что вы авторизованы, и что сервер обрабатывает /logs и не отдаёт index.html.';
+      }
     } else {
-      $('logs-view').textContent = 'Логи пусты (или нет доступа).';
+      const data = JSON.parse(text);
+      if(Array.isArray(data) && data.length){
+        $('logs-view').textContent = data.map(l => `[${l.timestamp}] ${l.user} — ${l.action}`).join('\n');
+      } else {
+        $('logs-view').textContent = 'Логи пусты (или нет доступа).';
+      }
     }
     $('dlg-logs')?.showModal();
   }catch(e){
     alert('Ошибка при загрузке логов: ' + e.message);
   }
-}
-
-// =================== BUILDINGS (economy) ===================
-const BUILDINGS = [
-  { name: 'Офис', income: 5, cost: 10 },
-  { name: 'Военная база', income: 15, cost: 30 },
-  { name: 'Аэропорт', income: 50, cost: 100 },
-  { name: 'Нефтекaчка', income: 200, cost: 500 }
-];
-
-// Flow: pick country (owner), pick building, check points, call server 'build_building'
-async function buildBuildingFlow(){
-  if(!USER) return alert('Сначала войдите');
-
-  const countryId = await promptAsync('Введите ID вашей страны');
-  if(!countryId) return;
-  const country = COUNTRIES.find(c => String(c.id) === String(countryId));
-  if(!country) return alert('Страна не найдена');
-  if(country.owner?.toLowerCase() !== (USER.login||'').toLowerCase()) return alert('Вы не владелец этой страны');
-
-  const menu = BUILDINGS.map((b,i)=>`${i+1}. ${b.name} (стоимость: ${b.cost}, +${b.income} очков/час)`).join('\n');
-  const choice = await promptAsync('Выберите здание:\n' + menu);
-  const idx = parseInt(choice) - 1;
-  if(isNaN(idx) || idx<0 || idx>=BUILDINGS.length) return alert('Неверный выбор');
-  const building = BUILDINGS[idx];
-
-  if((country.points||0) < building.cost) return alert('Недостаточно очков для строительства');
-
-  // send to server; server must implement 'build_building' op and perform points deduction & store building data
-  const res = await apiPost('build_building', { countryId, building: building.name });
-  if(!res.ok) return alert('Ошибка: ' + (res.message||'unknown'));
-
-  alert(`${building.name} построено! Пассивный доход ${building.income} очков/час`);
-  await loadCountries();
 }
 
 // =================== ПРОЧИЕ ФЛОУ ===================
@@ -512,11 +447,44 @@ async function assignOwnerFlow(){
   else alert('Ошибка: ' + (res.message || 'unknown'));
 }
 
+// NOTE: toggleEconomyFlow kept for backward compatibility (server may toggle global economy).
+// We also add a client-side "build" flow when user clicks "Построить здание" in actions.
 async function toggleEconomyFlow(){
-  // keep server toggle available for admins (but primary economy flow is buildings)
   const res = await apiPost('toggle_economy', {});
   if(res.ok) alert('Экономика теперь: ' + (res.value ? 'Включена' : 'Выключена'));
   else alert('Ошибка: ' + (res.message || 'unknown'));
+}
+
+// Client-side helper to show building purchase menu and call server op 'buy_building'.
+// Server MUST implement handling for op 'buy_building' (or adapt name).
+async function buildStructureFlow(){
+  if(!USER) return alert('Сначала войдите');
+  // find user's country (simple heuristic: owner == user.login)
+  const ownerCountries = COUNTRIES.filter(c => (c.owner||'').toLowerCase() === (USER.login||'').toLowerCase());
+  if(ownerCountries.length === 0) return alert('Вы не владеете ни одной страной');
+  const country = ownerCountries[0]; // if multiple — choose first, or later show chooser
+  const buildings = [
+    { id:'office', name:'Офис', income:5, cost:10 },
+    { id:'mil_base', name:'Военная база', income:15, cost:30 },
+    { id:'airport', name:'Аэропорт', income:50, cost:100 },
+    { id:'oil', name:'Нефтекачка', income:200, cost:500 }
+  ];
+  const listText = buildings.map(b => `${b.id} — ${b.name} (доход ${b.income}/ч, цена ${b.cost})`).join('\n');
+  const choice = await promptAsync('Выберите здание (введите id):\n' + listText);
+  if(!choice) return;
+  const b = buildings.find(x => x.id === choice || x.name.toLowerCase() === choice.toLowerCase());
+  if(!b) return alert('Неверный выбор здания');
+  // check points
+  const currentPoints = country.points || 0;
+  if(currentPoints < b.cost) return alert(`У страны ${country.name} недостаточно очков (${currentPoints}) для покупки (${b.cost})`);
+  // call server to perform purchase
+  const r = await apiPost('buy_building', { countryId: country.id, building: b.id });
+  if(r.ok){
+    alert(`Здание ${b.name} куплено для ${country.name}`);
+    await loadCountries();
+  } else {
+    alert('Ошибка покупки: ' + (r.message || 'unknown'));
+  }
 }
 
 async function givePointsFlow(){
@@ -536,7 +504,12 @@ function bindActionButtons(){
       if(!USER) { alert('Сначала войдите'); return; }
       const action = btn.dataset.action;
       if(action === 'admin-open'){ show($('admin-panel')); return; }
-      if(action === 'economy-spend'){ return await buildBuildingFlow(); } // changed: build flow instead of simple toggle
+      if(action === 'economy-spend'){
+        // Open building purchase flow instead of global toggle
+        // If you still want toggle behavior for admins, keep toggleEconomyFlow
+        await buildStructureFlow();
+        return;
+      }
       if(action === 'buy-unit'){
         const unit = btn.dataset.unit;
         const countryId = await promptAsync('Введите ID вашей страны');
@@ -545,9 +518,11 @@ function bindActionButtons(){
         if(r.ok) { alert('Юнит куплен'); await loadCountries(); } else alert('Ошибка: ' + (r.message||'unknown'));
       }
       if(action === 'declare-war'){
-        const target = await promptAsync('ID страны для войны:');
-        if(!target) return;
-        const res = await apiPost('declare_war', { attackerId: await promptAsync('Ваш ID страны:'), defenderId: target });
+        const defender = await promptAsync('ID страны для войны: (цель)');
+        if(!defender) return;
+        const attacker = await promptAsync('Ваш ID страны: (атакующий)');
+        if(!attacker) return;
+        const res = await apiPost('declare_war', { attackerId: attacker, defenderId: defender });
         if(res.ok) { alert('Война объявлена'); await loadCountries(); } else alert('Ошибка: ' + (res.message||'unknown'));
       }
       if(action === 'attack'){
@@ -576,7 +551,7 @@ function bindAdminButtons(){
   });
 }
 
-// =================== AUTH HANDLERS (не меняем логику регистрации/входа) ===================
+// =================== AUTH HANDLERS ===================
 function bindAuthHandlers(){
   const dlgAuth = $('dlg-auth');
   const btnRegister = $('btn-register');
@@ -621,6 +596,6 @@ document.addEventListener('DOMContentLoaded', async ()=>{
   await checkSession();
   await loadCountries();
 
-  // Re-render markers when SVG loaded (in case contentDocument wasn't available earlier)
+  // If SVG loads later, re-render
   $('map')?.addEventListener('load', ()=> renderCountriesOnMap());
 });
