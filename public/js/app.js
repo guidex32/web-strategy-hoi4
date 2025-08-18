@@ -5,7 +5,7 @@ let TOKEN = localStorage.getItem('token') || '';
 let USER = null;
 let COUNTRIES = [];
 
-// кэш для флагов (baseName -> fileName с расширением)
+// кэш: baseName -> fileName с расширением
 const FLAG_RESOLVE_CACHE = Object.create(null);
 
 const $ = id => document.getElementById(id);
@@ -72,7 +72,7 @@ async function loadCountries(){
     if(data && data.ok === false){ console.warn('countries:', data.message); return; }
     COUNTRIES = Object.values(data || {});
     updatePoints();
-    await renderCountriesOnMap(); // ПЕРЕРИСОВКА МАРКЕРОВ
+    await renderCountriesOnMap();
   }catch(e){ console.error(e); }
 }
 
@@ -112,9 +112,17 @@ function promptAsync(message){
 // =================== VALIDATION ===================
 function isValidCountryName(name){
   if(!name) return false;
-  if(name.length > 256) return false;
-  if(/\d/.test(name)) return false;                  // без цифр
-  return /^[\p{L}\s\-']+$/u.test(name);              // буквы (любой алф), пробел/дефис/апостроф
+  const trimmed = name.trim();
+  if(trimmed.length === 0 || trimmed.length > 256) return false;
+  if(/\d/.test(trimmed)) return false; // нельзя цифры
+  // максимально совместимая проверка букв (латиница + кириллица) + пробел/дефис/апостроф
+  const reFallback = /^[A-Za-z\u0400-\u04FF][A-Za-z\u0400-\u04FF\s\-']*$/u;
+  try{
+    const re = /^\p{L}[\p{L}\s\-']*$/u;
+    return re.test(trimmed);
+  }catch{
+    return reFallback.test(trimmed);
+  }
 }
 
 async function countryExistsByName(name){
@@ -129,9 +137,22 @@ async function countryExistsByName(name){
 }
 
 // =================== FLAGS: LIST & RESOLVE ===================
+// 1) Нормальный способ — новый эндпоинт сервера /api/flags (см. правки server.js ниже).
 async function fetchFlagsList(){
+  // Сначала пробуем серверный список
+  try{
+    const r = await fetch(`${API}/flags`, { headers: buildHeaders(false), cache: 'no-store' });
+    if(r.ok){
+      const ct = r.headers.get('content-type') || '';
+      if(ct.includes('application/json')){
+        const arr = await r.json();
+        if(Array.isArray(arr) && arr.length) return arr;
+      }
+    }
+  }catch(_){}
+
+  // Фолбэк: пробуем статический манифест в /flags/
   const candidates = ['/flags/manifest.json','/flags/index.json','/flags/_manifest.json'];
-  // 1) Явный JSON-манифест
   for(const url of candidates){
     try{
       const r = await fetch(ORIGIN + url, { cache: 'no-store' });
@@ -141,31 +162,14 @@ async function fetchFlagsList(){
           const j = await r.json();
           let arr = Array.isArray(j) ? j : (Array.isArray(j.flags) ? j.flags : null);
           if(arr && arr.length){
-            // нормализуем к baseName (без /flags/ и без расширений)
             return arr.map(f => String(f).replace(/^\/?flags\//,'').replace(/\.(png|jpe?g|svg|webp)$/i,''));
           }
         }
       }
     }catch(_){}
   }
-  // 2) HTML-листинг директории (если включен)
-  try{
-    const r = await fetch(`${ORIGIN}/flags/`, { cache: 'no-store' });
-    if(r.ok){
-      const ct = r.headers.get('content-type') || '';
-      if(ct.includes('text/html')){
-        const html = await r.text();
-        const doc = new DOMParser().parseFromString(html, 'text/html');
-        const anchors = [...doc.querySelectorAll('a[href]')];
-        const names = anchors
-          .map(a => a.getAttribute('href') || '')
-          .filter(href => /\.(png|jpe?g|svg|webp)$/i.test(href))
-          .map(href => href.replace(/^.*\//,'').replace(/\.(png|jpe?g|svg|webp)$/i,''));
-        if(names.length) return [...new Set(names)];
-      }
-    }
-  }catch(_){}
-  // 3) Не удалось получить список — вернём null, дальше спросим вручную
+
+  // Если списка нет — вернём null (дальше будет ручной ввод + проверка файла)
   return null;
 }
 
@@ -173,20 +177,15 @@ async function resolveExistingFlagFilename(baseName){
   if(!baseName) return null;
   if(FLAG_RESOLVE_CACHE[baseName]) return FLAG_RESOLVE_CACHE[baseName];
   const exts = ['png','jpg','jpeg','svg','webp'];
-
-  // Сначала HEAD, затем GET как fallback
   for(const ext of exts){
     const url = `${ORIGIN}/flags/${encodeURIComponent(baseName)}.${ext}`;
     try{
       let r = await fetch(url, { method:'HEAD', cache:'no-store' });
-      if(r.ok) { FLAG_RESOLVE_CACHE[baseName] = `${baseName}.${ext}`; return FLAG_RESOLVE_CACHE[baseName]; }
+      if(r.ok){ FLAG_RESOLVE_CACHE[baseName] = `${baseName}.${ext}`; return FLAG_RESOLVE_CACHE[baseName]; }
     }catch(_){}
     try{
       let r2 = await fetch(url, { method:'GET', cache:'no-store' });
-      if(r2.ok){
-        FLAG_RESOLVE_CACHE[baseName] = `${baseName}.${ext}`;
-        return FLAG_RESOLVE_CACHE[baseName];
-      }
+      if(r2.ok){ FLAG_RESOLVE_CACHE[baseName] = `${baseName}.${ext}`; return FLAG_RESOLVE_CACHE[baseName]; }
     }catch(_){}
   }
   return null;
@@ -195,29 +194,26 @@ async function resolveExistingFlagFilename(baseName){
 // =================== MAP RENDER ===================
 function ensureMarkersLayer(){
   const wrap = document.querySelector('.map-wrap') || document.body;
+  // гарантируем относительное позиционирование обёртки, чтобы слой совпадал с картой
+  if(getComputedStyle(wrap).position === 'static'){
+    wrap.style.position = 'relative';
+  }
   let layer = document.getElementById('map-markers');
   if(!layer){
     layer = document.createElement('div');
     layer.id = 'map-markers';
     layer.style.position = 'absolute';
+    layer.style.left = '0';
+    layer.style.top = '0';
+    layer.style.right = '0';
+    layer.style.bottom = '0';
+    layer.style.width = '100%';
+    layer.style.height = '100%';
     layer.style.pointerEvents = 'none';
-    // чтобы оверлей был над <object>
     layer.style.zIndex = '5';
     wrap.appendChild(layer);
   }
   return layer;
-}
-
-function syncMarkersLayerRect(layer){
-  const mapObj = $('map');
-  if(!mapObj || !layer) return;
-  const rect = mapObj.getBoundingClientRect();
-  // переносим слой поверх карты
-  layer.style.left   = rect.left + window.scrollX + 'px';
-  layer.style.top    = rect.top  + window.scrollY + 'px';
-  layer.style.width  = rect.width + 'px';
-  layer.style.height = rect.height + 'px';
-  layer.style.position = 'absolute';
 }
 
 async function renderCountriesOnMap(){
@@ -225,13 +221,8 @@ async function renderCountriesOnMap(){
   if(!mapObj) return;
 
   const layer = ensureMarkersLayer();
-  syncMarkersLayerRect(layer);
-  window.addEventListener('resize', ()=> syncMarkersLayerRect(layer));
-
-  // очистка
   layer.innerHTML = '';
 
-  // добавляем маркеры
   for(const c of COUNTRIES){
     if(typeof c.x !== 'number' || typeof c.y !== 'number') continue;
 
@@ -244,14 +235,12 @@ async function renderCountriesOnMap(){
     marker.style.borderRadius = '50%';
     marker.style.background = '#eee';
     marker.style.boxShadow = '0 0 2px rgba(0,0,0,.4)';
-    marker.style.pointerEvents = 'auto'; // чтобы tooltip/клики можно было ловить
+    marker.style.pointerEvents = 'auto';
     marker.title = `${c.name} (${c.owner || '—'})`;
 
-    // Пытаемся показать флаг
     const base = (c.flag || '').replace(/\.(png|jpe?g|svg|webp)$/i,'');
     let file = base ? (FLAG_RESOLVE_CACHE[base] || null) : null;
     if(!file && base){
-      // не блокируем всю отрисовку — резолвим флаг асинхронно
       resolveExistingFlagFilename(base).then(f=>{
         if(f){
           const img = new Image();
@@ -285,17 +274,20 @@ async function createCountryFlow(){
   if(!isValidCountryName(name)) return alert('Некорректное название!');
   if(await countryExistsByName(name)) return alert('Страна с таким именем уже существует');
 
-  // 2) Флаг
+  // 2) Флаги
   let flags = await fetchFlagsList();
   let flagBase = '';
   if(flags && flags.length){
-    const choice = await promptAsync('Выберите флаг (введите имя из списка):\n' + flags.join(', '));
+    // покажем первые 50 для читаемости
+    const sample = flags.slice(0, 50);
+    const choice = await promptAsync('Выберите флаг (введите точное имя из списка):\n' + sample.join(', ') + (flags.length>50 ? `\n...и ещё ${flags.length-50}` : ''));
     if(!choice) return alert('Флаг не выбран');
     if(!flags.includes(choice)) return alert('Такого флага нет в списке');
     const resolved = await resolveExistingFlagFilename(choice);
     if(!resolved) return alert('Файл флага не найден в папке /flags');
     flagBase = choice;
   } else {
+    // если сервер не даёт список — ручной ввод с реальной проверкой файла
     const manual = await promptAsync('Введите имя флага (без .png/.jpg/.svg/.webp)\nПапка: /flags');
     if(!manual) return alert('Флаг не выбран');
     const resolved = await resolveExistingFlagFilename(manual);
@@ -303,14 +295,10 @@ async function createCountryFlow(){
     flagBase = manual;
   }
 
-  // 3) Владелец (можно пусто — тогда создаётся на себя)
+  // 3) Владелец (опционально). Проверять существование будем на шаге assign_owner — сервер сам вернёт ошибку, если нет пользователя или уже есть страна.
   const ownerLogin = await promptAsync('Введите логин владельца страны (пусто = вы)');
-  if(ownerLogin){
-    const hasCountry = COUNTRIES.some(c => (c.owner || '').toLowerCase() === ownerLogin.toLowerCase());
-    if(hasCountry) return alert('У этого пользователя уже есть страна');
-  }
 
-  // 4) Клик по карте
+  // 4) Клик по карте (в реальных координатах объекта)
   alert('Теперь кликните по карте, где разместить страну');
   const mapObj = $('map');
   if(!mapObj) return alert('Элемент карты не найден');
@@ -344,9 +332,7 @@ async function createCountryFlow(){
         if(root) root.addEventListener('click', onSvgClick);
       }catch(_){}
     };
-    // если svg уже подгружен
     trySvg();
-    // подстрахуемся на случай «поздней» загрузки
     mapObj.addEventListener('load', trySvg, { once:true });
   });
 
@@ -354,14 +340,17 @@ async function createCountryFlow(){
 
   // 5) Создание
   const res = await apiPost('create_country', { name, flag: flagBase, x, y });
-  if(!res.ok) return alert('Ошибка: ' + (res.message || 'unknown'));
+  if(!res || !res.ok) return alert('Ошибка при создании: ' + (res && res.message || 'unknown'));
 
-  // 6) Назначение владельца (если другой)
+  // 6) Назначение владельца (если попросили другого)
   if(ownerLogin && ownerLogin.toLowerCase() !== (USER.login||'').toLowerCase()){
     try{
+      // найдём только что созданную страну по имени
       const all = await fetch(`${API}/countries`, { headers: buildHeaders(false) }).then(r=>r.json());
       const created = Object.values(all || {}).find(c => (c.name||'').toLowerCase() === name.toLowerCase());
-      if(created){
+      if(!created) {
+        alert('Страна создана, но не нашлась для назначение владельца — обновите страницу и назначьте вручную.');
+      } else {
         const ar = await apiPost('assign_owner', { countryId: created.id, login: ownerLogin });
         if(!ar.ok) return alert('Страна создана, но владельца назначить не удалось: ' + (ar.message || 'unknown'));
       }
@@ -376,12 +365,17 @@ async function createCountryFlow(){
 
 // =================== LOGS ===================
 async function viewLogsFlow(){
-  if(!USER || !(USER.role === 'admin' || USER.role === 'owner')) return alert('Нет прав');
+  if(!USER) return alert('Войдите!');
+  if(!(USER.role === 'admin' || USER.role === 'owner')){
+    $('logs-view').textContent = 'Нет доступа к логам: нужна роль admin или owner.';
+    $('dlg-logs')?.showModal();
+    return;
+  }
   try{
     const res = await fetch(`${ORIGIN}/logs`, { headers: buildHeaders(false) });
     const ct = res.headers.get('content-type') || '';
     if(!ct.includes('application/json')){
-      $('logs-view').textContent = 'Логи недоступны (сервер вернул не JSON). Требуется роль admin на сервере.';
+      $('logs-view').textContent = 'Логи недоступны (сервер вернул не JSON). Проверьте права на сервере.';
     } else {
       const data = await res.json();
       if(Array.isArray(data) && data.length){
@@ -389,7 +383,7 @@ async function viewLogsFlow(){
           l => `[${l.timestamp}] ${l.user} — ${l.action}`
         ).join('\n');
       } else {
-        $('logs-view').textContent = 'Логи пусты';
+        $('logs-view').textContent = 'Логи пусты (или нет доступа).';
       }
     }
     $('dlg-logs')?.showModal();
@@ -518,6 +512,6 @@ document.addEventListener('DOMContentLoaded', async ()=>{
   await checkSession();
   await loadCountries();
 
-  // если карта перегружается (SVG догрузился/перерисовался), обновим слой маркеров
+  // на случай, если SVG подгружается позже
   $('map')?.addEventListener('load', ()=> renderCountriesOnMap());
 });
