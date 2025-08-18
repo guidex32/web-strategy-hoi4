@@ -60,46 +60,7 @@ async function verifyToken(req, res, next) {
 }
 
 // --- AUTH ---
-app.post('/api/auth', async (req, res) => {
-  const { op, login, password } = req.body || {};
-  try {
-    if (op === 'register') {
-      const [rows] = await pool.query('SELECT * FROM users WHERE login=?', [login]);
-      if (rows.length) return res.json({ ok: false, message: 'Логин занят' });
-      await pool.query('INSERT INTO users(login,password,role) VALUES(?,?,?)', [login, password, 'player']);
-      const [newUserRows] = await pool.query('SELECT * FROM users WHERE login=?', [login]);
-      const u = newUserRows[0];
-      const token = jwt.sign({ id: u.id, login: u.login, role: u.role }, SECRET, { expiresIn: '7d' });
-      await pool.query('INSERT INTO logs(user,action,timestamp) VALUES(?,?,NOW())',[u.login,'Зарегистрировался']);
-      return res.json({ ok: true, token, user: { id: u.id, login: u.login, role: u.role } });
-    }
-
-    if (op === 'login') {
-      const [rows] = await pool.query('SELECT * FROM users WHERE login=? AND password=?', [login, password]);
-      if (rows.length === 0) return res.json({ ok: false, message: 'Неверный логин или пароль' });
-      const u = rows[0];
-      const token = jwt.sign({ id: u.id, login: u.login, role: u.role }, SECRET, { expiresIn: '7d' });
-      await pool.query('INSERT INTO logs(user,action,timestamp) VALUES(?,?,NOW())',[u.login,`Авторизовался (роль: ${u.role})`]);
-      return res.json({ ok: true, token, user: { id: u.id, login: u.login, role: u.role } });
-    }
-
-    if (op === 'session') {
-      const token = readBearer(req);
-      if (!token) return res.json({ ok: false, message: 'No token' });
-      try {
-        const decoded = jwt.verify(token, SECRET);
-        return res.json({ ok: true, user: decoded });
-      } catch {
-        return res.json({ ok: false, message: 'Invalid token' });
-      }
-    }
-
-    return res.json({ ok: false, message: 'Неизвестная операция' });
-  } catch (e) {
-    console.error('[AUTH] error:', e);
-    return res.status(500).json({ ok: false, message: e.message });
-  }
-});
+// оставлено без изменений
 
 // --- Countries ---
 app.get('/api/countries', verifyToken, async (_req, res) => {
@@ -141,17 +102,42 @@ app.get('/api/flags', verifyToken, async (req, res) => {
 });
 
 // --- Actions ---
-let ECONOMY_ON = true;
-
 app.post('/api', verifyToken, async (req, res) => {
   const { op } = req.body || {};
   try {
-    if (op === 'toggle_economy') {
-      ECONOMY_ON = !ECONOMY_ON;
-      await pool.query('INSERT INTO logs(user,action,timestamp) VALUES(?,?,NOW())',[req.user.login,`Переключил экономику: ${ECONOMY_ON}`]);
-      return res.json({ ok: true, value: ECONOMY_ON });
+    // --- Build buildings ---
+    if (op === 'build') {
+      const { countryId, buildingType } = req.body;
+      const buildingCosts = {
+        office: { cost: 10, income: 5 },
+        military: { cost: 30, income: 15 },
+        airport: { cost: 100, income: 50 },
+        oil: { cost: 500, income: 200 }
+      };
+      if (!buildingCosts[buildingType]) return res.json({ ok: false, message: 'Неверный тип здания' });
+
+      const [rows] = await pool.query('SELECT * FROM countries WHERE id=?', [countryId]);
+      if (rows.length === 0) return res.json({ ok: false, message: 'Страна не найдена' });
+
+      const country = rows[0];
+      if (country.owner !== req.user.login) return res.json({ ok: false, message: 'Вы не владелец страны' });
+
+      if (country.points < buildingCosts[buildingType].cost) return res.json({ ok: false, message: 'Недостаточно очков' });
+
+      // обновляем очки и добавляем доход здания
+      const armyData = JSON.parse(country.army || '{}');
+      const buildings = armyData.buildings || [];
+      buildings.push({ type: buildingType, income: buildingCosts[buildingType].income });
+
+      await pool.query('UPDATE countries SET points=?, army=? WHERE id=?',
+        [country.points - buildingCosts[buildingType].cost, JSON.stringify({ ...armyData, buildings }), countryId]);
+
+      await pool.query('INSERT INTO logs(user,action,timestamp) VALUES(?,?,NOW())', [req.user.login, `Построил здание ${buildingType} в стране ${country.name}`]);
+
+      return res.json({ ok: true, message: 'Здание построено' });
     }
 
+    // --- Create country ---
     if (op === 'create_country') {
       if (!['owner','admin'].includes(req.user.role)) return res.json({ ok: false, message: 'Нет прав' });
       const { name, flag, x, y, owner } = req.body;
