@@ -115,7 +115,6 @@ function isValidCountryName(name){
   const trimmed = name.trim();
   if(trimmed.length === 0 || trimmed.length > 256) return false;
   if(/\d/.test(trimmed)) return false; // нельзя цифры
-  // максимально совместимая проверка букв (латиница + кириллица) + пробел/дефис/апостроф
   const reFallback = /^[A-Za-z\u0400-\u04FF][A-Za-z\u0400-\u04FF\s\-']*$/u;
   try{
     const re = /^\p{L}[\p{L}\s\-']*$/u;
@@ -137,9 +136,7 @@ async function countryExistsByName(name){
 }
 
 // =================== FLAGS: LIST & RESOLVE ===================
-// 1) Нормальный способ — новый эндпоинт сервера /api/flags (см. правки server.js ниже).
 async function fetchFlagsList(){
-  // Сначала пробуем серверный список
   try{
     const r = await fetch(`${API}/flags`, { headers: buildHeaders(false), cache: 'no-store' });
     if(r.ok){
@@ -151,7 +148,6 @@ async function fetchFlagsList(){
     }
   }catch(_){}
 
-  // Фолбэк: пробуем статический манифест в /flags/
   const candidates = ['/flags/manifest.json','/flags/index.json','/flags/_manifest.json'];
   for(const url of candidates){
     try{
@@ -169,7 +165,6 @@ async function fetchFlagsList(){
     }catch(_){}
   }
 
-  // Если списка нет — вернём null (дальше будет ручной ввод + проверка файла)
   return null;
 }
 
@@ -191,10 +186,9 @@ async function resolveExistingFlagFilename(baseName){
   return null;
 }
 
-// =================== MAP RENDER ===================
+// =================== MAP RENDER FIX ===================
 function ensureMarkersLayer(){
   const wrap = document.querySelector('.map-wrap') || document.body;
-  // гарантируем относительное позиционирование обёртки, чтобы слой совпадал с картой
   if(getComputedStyle(wrap).position === 'static'){
     wrap.style.position = 'relative';
   }
@@ -228,8 +222,8 @@ async function renderCountriesOnMap(){
 
     const marker = document.createElement('div');
     marker.style.position = 'absolute';
-    marker.style.left = Math.max(0, (c.x - 12)) + 'px';
-    marker.style.top  = Math.max(0, (c.y - 12)) + 'px';
+    marker.style.left = Math.min(layer.clientWidth-24, Math.max(0, c.x - 12)) + 'px';
+    marker.style.top  = Math.min(layer.clientHeight-24, Math.max(0, c.y - 12)) + 'px';
     marker.style.width = '24px';
     marker.style.height = '24px';
     marker.style.borderRadius = '50%';
@@ -240,25 +234,24 @@ async function renderCountriesOnMap(){
 
     const base = (c.flag || '').replace(/\.(png|jpe?g|svg|webp)$/i,'');
     let file = base ? (FLAG_RESOLVE_CACHE[base] || null) : null;
+    const appendFlag = (f)=>{
+      if(f){
+        const img = new Image();
+        img.src = `${ORIGIN}/flags/${f}`;
+        img.style.width = '100%';
+        img.style.height = '100%';
+        img.style.objectFit = 'cover';
+        marker.innerHTML = '';
+        marker.appendChild(img);
+      }
+    };
     if(!file && base){
       resolveExistingFlagFilename(base).then(f=>{
-        if(f){
-          const img = new Image();
-          img.src = `${ORIGIN}/flags/${f}`;
-          img.style.width = '100%';
-          img.style.height = '100%';
-          img.style.objectFit = 'cover';
-          marker.innerHTML = '';
-          marker.appendChild(img);
-        }
+        FLAG_RESOLVE_CACHE[base] = f;
+        appendFlag(f);
       });
-    }else if(file){
-      const img = new Image();
-      img.src = `${ORIGIN}/flags/${file}`;
-      img.style.width = '100%';
-      img.style.height = '100%';
-      img.style.objectFit = 'cover';
-      marker.appendChild(img);
+    } else if(file){
+      appendFlag(file);
     }
 
     layer.appendChild(marker);
@@ -269,16 +262,13 @@ async function renderCountriesOnMap(){
 async function createCountryFlow(){
   if(!USER || !(USER.role === 'owner' || USER.role === 'admin')) return alert('Нет прав');
 
-  // 1) Название
   const name = await promptAsync('Введите название страны (≤256, без цифр)');
   if(!isValidCountryName(name)) return alert('Некорректное название!');
   if(await countryExistsByName(name)) return alert('Страна с таким именем уже существует');
 
-  // 2) Флаги
   let flags = await fetchFlagsList();
   let flagBase = '';
   if(flags && flags.length){
-    // покажем первые 50 для читаемости
     const sample = flags.slice(0, 50);
     const choice = await promptAsync('Выберите флаг (введите точное имя из списка):\n' + sample.join(', ') + (flags.length>50 ? `\n...и ещё ${flags.length-50}` : ''));
     if(!choice) return alert('Флаг не выбран');
@@ -287,7 +277,6 @@ async function createCountryFlow(){
     if(!resolved) return alert('Файл флага не найден в папке /flags');
     flagBase = choice;
   } else {
-    // если сервер не даёт список — ручной ввод с реальной проверкой файла
     const manual = await promptAsync('Введите имя флага (без .png/.jpg/.svg/.webp)\nПапка: /flags');
     if(!manual) return alert('Флаг не выбран');
     const resolved = await resolveExistingFlagFilename(manual);
@@ -295,10 +284,8 @@ async function createCountryFlow(){
     flagBase = manual;
   }
 
-  // 3) Владелец (опционально). Проверять существование будем на шаге assign_owner — сервер сам вернёт ошибку, если нет пользователя или уже есть страна.
   const ownerLogin = await promptAsync('Введите логин владельца страны (пусто = вы)');
 
-  // 4) Клик по карте (в реальных координатах объекта)
   alert('Теперь кликните по карте, где разместить страну');
   const mapObj = $('map');
   if(!mapObj) return alert('Элемент карты не найден');
@@ -338,14 +325,11 @@ async function createCountryFlow(){
 
   const { x, y } = await waitClickOnMap();
 
-  // 5) Создание
   const res = await apiPost('create_country', { name, flag: flagBase, x, y });
   if(!res || !res.ok) return alert('Ошибка при создании: ' + (res && res.message || 'unknown'));
 
-  // 6) Назначение владельца (если попросили другого)
   if(ownerLogin && ownerLogin.toLowerCase() !== (USER.login||'').toLowerCase()){
     try{
-      // найдём только что созданную страну по имени
       const all = await fetch(`${API}/countries`, { headers: buildHeaders(false) }).then(r=>r.json());
       const created = Object.values(all || {}).find(c => (c.name||'').toLowerCase() === name.toLowerCase());
       if(!created) {
@@ -360,7 +344,7 @@ async function createCountryFlow(){
   }
 
   alert('Страна создана');
-  await loadCountries(); // перерисует маркеры
+  await loadCountries();
 }
 
 // =================== LOGS ===================
@@ -387,34 +371,38 @@ async function viewLogsFlow(){
       }
     }
     $('dlg-logs')?.showModal();
-  }catch(e){
-    alert('Ошибка при загрузке логов: ' + e.message);
-  }
+  }catch(e){ $('logs-view').textContent = 'Ошибка: ' + e.message; $('dlg-logs')?.showModal(); }
 }
 
-// =================== ПРОЧИЕ ФЛОУ ===================
-async function assignOwnerFlow(){
-  const id = await promptAsync("Введите ID страны"); if(!id) return;
-  const login = await promptAsync("Введите логин нового владельца"); if(!login) return;
-  const res = await apiPost('assign_owner', { countryId: id, login });
-  if(res.ok) { alert('Владелец назначен'); await loadCountries(); }
-  else alert('Ошибка: ' + (res.message || 'unknown'));
-}
+// =================== BUILDINGS ===================
+const BUILDINGS = [
+  { name: 'Офис', income: 5, cost: 10 },
+  { name: 'Военная база', income: 15, cost: 30 },
+  { name: 'Аэропорт', income: 50, cost: 100 },
+  { name: 'Нефтекaчка', income: 200, cost: 500 }
+];
 
-async function toggleEconomyFlow(){
-  const res = await apiPost('toggle_economy', {});
-  if(res.ok) alert('Экономика теперь: ' + (res.value ? 'Включена' : 'Выключена'));
-  else alert('Ошибка: ' + (res.message || 'unknown'));
-}
+async function buildBuildingFlow(){
+  if(!USER) return alert('Сначала войдите');
 
-async function givePointsFlow(){
-  if(!USER || !(USER.role === 'admin' || USER.role === 'owner')) return alert('Нет прав');
-  const id = await promptAsync("Введите ID страны");
-  const amount = await promptAsync("Введите количество очков");
-  if(!amount || isNaN(amount)) return alert("Только число!");
-  const res = await apiPost('give_points', { countryId: id, amount });
-  if(res.ok) { alert('Очки выданы'); await loadCountries(); }
-  else alert('Ошибка: ' + (res.message || 'unknown'));
+  const countryId = await promptAsync('Введите ID вашей страны');
+  if(!countryId) return;
+  const country = COUNTRIES.find(c => String(c.id) === String(countryId));
+  if(!country) return alert('Страна не найдена');
+  if(country.owner?.toLowerCase() !== (USER.login||'').toLowerCase()) return alert('Вы не владелец этой страны');
+
+  const choice = await promptAsync('Выберите здание:\n' + BUILDINGS.map((b,i)=>`${i+1}. ${b.name} (стоимость: ${b.cost})`).join('\n'));
+  const idx = parseInt(choice)-1;
+  if(isNaN(idx) || idx<0 || idx>=BUILDINGS.length) return alert('Неверный выбор');
+  const building = BUILDINGS[idx];
+
+  if((country.points||0) < building.cost) return alert('Недостаточно очков для строительства');
+
+  const res = await apiPost('build_building', { countryId, building: building.name });
+  if(!res.ok) return alert('Ошибка: ' + (res.message||'unknown'));
+
+  alert(`${building.name} построено! Пассивный доход ${building.income} очков/час`);
+  await loadCountries();
 }
 
 // =================== BUTTONS ===================
@@ -423,11 +411,8 @@ function bindActionButtons(){
     btn.addEventListener('click', async ()=>{
       if(!USER) { alert('Сначала войдите'); return; }
       const action = btn.dataset.action;
-      if(action === 'admin-open'){ show($('admin-panel')); return; }
-      if(action === 'economy-spend'){
-        await toggleEconomyFlow();
-        await loadCountries();
-      }
+      if(action === 'build-building') return buildBuildingFlow();
+      if(action === 'economy-spend') return alert('Экономика теперь управляется через здания и пассивный доход');
       if(action === 'buy-unit'){
         const unit = btn.dataset.unit;
         const countryId = await promptAsync('Введите ID вашей страны');
@@ -452,66 +437,27 @@ function bindActionButtons(){
   });
 }
 
-function bindAdminButtons(){
-  document.querySelectorAll('#admin-panel [data-admin]').forEach(btn=>{
-    btn.addEventListener('click', async ()=>{
-      if(!USER) return alert('Войдите!');
-      const action = btn.getAttribute('data-admin');
-      if(action === 'create-country' && (USER.role === 'owner' || USER.role === 'admin')) return await createCountryFlow();
-      if(action === 'assign-owner' && (USER.role === 'owner' || USER.role === 'admin')) return await assignOwnerFlow();
-      if(action === 'toggle-economy' && (USER.role === 'admin' || USER.role === 'owner')) return await toggleEconomyFlow();
-      if(action === 'give-points' && (USER.role === 'admin' || USER.role === 'owner')) return await givePointsFlow();
-      if(action === 'view-logs' && (USER.role === 'admin' || USER.role === 'owner')) return await viewLogsFlow();
-      alert('Нет прав или неизвестная операция');
-    });
-  });
-}
-
-// =================== AUTH HANDLERS ===================
-function bindAuthHandlers(){
-  const dlgAuth = $('dlg-auth');
-  const btnRegister = $('btn-register');
-  const btnSignin = $('btn-signin');
-
-  if(btnRegister){
-    btnRegister.addEventListener('click', async e=>{
-      e.preventDefault();
-      const login = $('auth-username')?.value?.trim();
-      const pass  = $('auth-password')?.value?.trim();
-      if(!login || !pass) return alert('Введите логин и пароль');
-      const r = await apiAuth('register', { login, password: pass });
-      if(r.ok){ TOKEN = r.token; localStorage.setItem('token', TOKEN); USER = r.user; if(dlgAuth) dlgAuth.close(); await checkSession(); await loadCountries(); }
-      else alert(r.message || 'Ошибка');
-    });
-  }
-
-  if(btnSignin){
-    btnSignin.addEventListener('click', async e=>{
-      e.preventDefault();
-      const login = $('auth-username')?.value?.trim();
-      const pass  = $('auth-password')?.value?.trim();
-      if(!login || !pass) return alert('Введите логин и пароль');
-      const r = await apiAuth('login', { login, password: pass });
-      if(r.ok){ TOKEN = r.token; localStorage.setItem('token', TOKEN); USER = r.user; if(dlgAuth) dlgAuth.close(); await checkSession(); await loadCountries(); }
-      else alert(r.message || 'Ошибка');
-    });
-  }
-}
-
 // =================== INIT ===================
-document.addEventListener('DOMContentLoaded', async ()=>{
-  bindActionButtons();
-  bindAdminButtons();
-  bindAuthHandlers();
-
-  $('btn-logout')?.addEventListener('click', async ()=>{
-    TOKEN = ''; USER = null; localStorage.removeItem('token');
-    await checkSession();
-  });
-
+async function initApp(){
   await checkSession();
   await loadCountries();
+  bindActionButtons();
 
-  // на случай, если SVG подгружается позже
-  $('map')?.addEventListener('load', ()=> renderCountriesOnMap());
-});
+  $('btn-login')?.addEventListener('click', async ()=>{
+    const login = await promptAsync('Логин'); if(!login) return;
+    const password = await promptAsync('Пароль'); if(!password) return;
+    const r = await apiAuth('login', { login, password });
+    if(r.ok && r.token){ TOKEN = r.token; localStorage.setItem('token', TOKEN); await checkSession(); await loadCountries(); alert('Вход выполнен'); }
+    else alert('Ошибка входа: ' + (r.message||'unknown'));
+  });
+
+  $('btn-logout')?.addEventListener('click', ()=>{
+    TOKEN = ''; USER = null; localStorage.removeItem('token');
+    checkSession();
+  });
+
+  $('btn-create-country')?.addEventListener('click', createCountryFlow);
+  $('btn-view-logs')?.addEventListener('click', viewLogsFlow);
+}
+
+document.addEventListener('DOMContentLoaded', initApp);
