@@ -38,23 +38,7 @@ async function apiAuth(op,data){
   }catch(e){ return {ok:false,message:e.message}; }
 }
 
-async function loadCountries(){
-  if(!TOKEN) return;
-  try{
-    const res = await fetch(`${API}/countries`,{headers:buildHeaders(false)});
-    const data = await res.json();
-    if(data && data.ok===false){ console.warn('countries:',data.message); return; }
-    COUNTRIES = Object.values(data||{});
-    updatePoints();
-  }catch(e){ console.error(e); }
-}
-
-function updatePoints(){
-  let total=0;
-  COUNTRIES.forEach(c=>{ total+=c.points||0; });
-  const p=$('points'); if(p) p.textContent='Очки: '+total;
-}
-
+// =================== SESSION / COUNTRIES ===================
 async function checkSession(){
   if(!TOKEN){ USER=null; hide($('user-info')); hide($('btn-logout')); show($('btn-login')); hide($('admin-panel')); return false; }
   const r=await apiAuth('session',{});
@@ -71,6 +55,25 @@ async function checkSession(){
   }
 }
 
+async function loadCountries(){
+  if(!TOKEN) return;
+  try{
+    const res = await fetch(`${API}/countries`,{headers:buildHeaders(false)});
+    const data = await res.json();
+    if(data && data.ok===false){ console.warn('countries:',data.message); return; }
+    COUNTRIES = Object.values(data||{});
+    updatePoints();
+    console.log('Countries loaded:',COUNTRIES);
+  }catch(e){ console.error(e); }
+}
+
+function updatePoints(){
+  let total=0;
+  COUNTRIES.forEach(c=>{ total+=c.points||0; });
+  const p=$('points'); if(p) p.textContent='Очки: '+total;
+}
+
+// =================== PROMPT HELPER ===================
 function promptAsync(message){
   return new Promise(resolve=>{
     const input=$('prompt-input'), dlg=$('dlg-prompt'), title=$('prompt-title');
@@ -82,38 +85,15 @@ function promptAsync(message){
   });
 }
 
-// =================== BUILDINGS / ECONOMY ===================
-const BUILDINGS=[
-  {name:'Офис',cost:10,income:5},
-  {name:'Военная база',cost:30,income:15},
-  {name:'Аэропорт',cost:100,income:50},
-  {name:'Нефтекачка',cost:500,income:200}
-];
-
-async function buildBuildingFlow(){
-  if(!USER) return alert('Войдите');
-  const myCountry=COUNTRIES.find(c=>c.owner===USER.login);
-  if(!myCountry) return alert('У вас нет страны');
-  const options=BUILDINGS.map(b=>`${b.name} (стоимость ${b.cost})`).join('\n');
-  const choice=await promptAsync('Выберите здание:\n'+options);
-  const building=BUILDINGS.find(b=>b.name.toLowerCase()===choice.toLowerCase());
-  if(!building) return alert('Неверный выбор здания');
-  if((myCountry.points||0)<building.cost) return alert('Недостаточно очков');
-  const res=await apiPost('build',{countryId:myCountry.id,building:building.name});
-  if(res.ok){ alert(`Здание построено: ${building.name}, доход +${building.income}/час`); await loadCountries(); }
-  else alert('Ошибка: '+(res.message||'unknown'));
-}
-
 // =================== COUNTRY CREATION ===================
 async function createCountryFlow(){
   if(!USER || !(USER.role==='owner'||USER.role==='admin')) return alert('Нет прав');
   // Название страны
   const name=await promptAsync('Введите название страны (максимум 256 символов, только буквы)');
   if(!name||name.length>256||/\d/.test(name)) return alert('Некорректное название!');
-  // Проверка на существование
   const check=await apiPost('check_country',{name}); if(check.exists) return alert('Страна уже существует!');
   // Список флагов
-  const flags=await apiPost('list_flags',{}); // возвращает {flags:['flag1','flag2',...]}
+  const flags=await apiPost('list_flags',{}); 
   if(!flags.ok) return alert('Не удалось получить список флагов');
   const flagChoice=await promptAsync('Выберите флаг:\n'+flags.flags.join(', '));
   if(!flags.flags.includes(flagChoice)) return alert('Такого флага нет!');
@@ -139,6 +119,28 @@ async function createCountryFlow(){
   });
 }
 
+// =================== BUILDINGS / ECONOMY ===================
+const BUILDINGS=[
+  {name:'Офис',cost:10,income:5},
+  {name:'Военная база',cost:30,income:15},
+  {name:'Аэропорт',cost:100,income:50},
+  {name:'Нефтекачка',cost:500,income:200}
+];
+
+async function buildBuildingFlow(){
+  if(!USER) return alert('Войдите');
+  const myCountry=COUNTRIES.find(c=>c.owner===USER.login);
+  if(!myCountry) return alert('У вас нет страны');
+  const options=BUILDINGS.map(b=>`${b.name} (стоимость ${b.cost})`).join('\n');
+  const choice=await promptAsync('Выберите здание:\n'+options);
+  const building=BUILDINGS.find(b=>b.name.toLowerCase()===choice.toLowerCase());
+  if(!building) return alert('Неверный выбор здания');
+  if((myCountry.points||0)<building.cost) return alert('Недостаточно очков');
+  const res=await apiPost('build',{countryId:myCountry.id,building:building.name});
+  if(res.ok){ alert(`Здание построено: ${building.name}, доход +${building.income}/час`); await loadCountries(); }
+  else alert('Ошибка: '+(res.message||'unknown'));
+}
+
 // =================== LOGS ===================
 async function viewLogsFlow(){
   if(!USER||!(USER.role==='admin'||USER.role==='owner')) return alert('Нет прав');
@@ -151,7 +153,21 @@ async function viewLogsFlow(){
   }catch(e){ alert('Ошибка: '+e.message); }
 }
 
-// =================== POINTS ===================
+// =================== EXISTING ADMIN FUNCTIONS ===================
+async function assignOwnerFlow(){
+  const id=await promptAsync("Введите ID страны"); if(!id) return;
+  const login=await promptAsync("Введите логин нового владельца"); if(!login) return;
+  const res=await apiPost('assign_owner',{countryId:id,login});
+  if(res.ok){ alert('Владелец назначен'); await loadCountries(); }
+  else alert('Ошибка: '+(res.message||'unknown'));
+}
+
+async function toggleEconomyFlow(){
+  const res=await apiPost('toggle_economy',{});
+  if(res.ok) alert('Экономика теперь: '+(res.value?'Включена':'Выключена'));
+  else alert('Ошибка: '+(res.message||'unknown'));
+}
+
 async function givePointsFlow(){
   if(!USER || !(USER.role==='admin'||USER.role==='owner')) return alert('Нет прав');
   const id=await promptAsync('Введите ID страны'); if(!id) return;
@@ -160,7 +176,7 @@ async function givePointsFlow(){
   else alert('Ошибка: '+(res.message||'unknown'));
 }
 
-// =================== ACTIONS ===================
+// =================== BUTTON BINDINGS ===================
 function bindActionButtons(){
   document.querySelectorAll('#actions .btn').forEach(btn=>{
     btn.addEventListener('click',async ()=>{
@@ -178,8 +194,10 @@ function bindAdminButtons(){
       if(!USER) return alert('Войдите!');
       const action=btn.getAttribute('data-admin');
       if(action==='create-country') return await createCountryFlow();
-      if(action==='view-logs') return await viewLogsFlow();
+      if(action==='assign-owner') return await assignOwnerFlow();
+      if(action==='toggle-economy') return await toggleEconomyFlow();
       if(action==='give-points') return await givePointsFlow();
+      if(action==='view-logs') return await viewLogsFlow();
       alert('Нет прав или неизвестная операция');
     });
   });
